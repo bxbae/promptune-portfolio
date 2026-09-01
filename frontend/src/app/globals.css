@@ -402,19 +402,32 @@ white-space:nowrap으로 줄바꿈(세로 나열) 자체를 막아둠. */
 .quote-btn:hover { background: var(--panel); color: var(--ink); }
 .quote-btn svg { width: 14px; height: 14px; }
 
-/* 응답 생성 실패 시 뜨는 작은 되돌리기(재시도) 아이콘 - 말풍선과 같은 줄, 왼쪽에 배치 */
-.user-retry-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: fit-content; height: 22px; padding-left: 6px; border: none; border-radius: 50px; background: var(--panel-alt); color: var(--muted); cursor: pointer; font-size: 10px; }
+/* 말풍선과 같은 줄, 왼쪽에 붙는 액션 아이콘(재시도·인용) - 세로 여백을 추가로 안 씀 */
+.msg-user-line { display: flex; align-items: flex-end; gap: 4px; }
+.msg-user-actions { display: flex; flex-direction: column; gap: 4px; }
+
+/* 응답 생성 실패 시 뜨는 작은 되돌리기(재시도) 아이콘 */
+.user-retry-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  width: fit-content; height: 22px; padding-left: 6px;
+  border: none; border-radius: 50px;
+  background: var(--panel-alt); color: var(--muted); cursor: pointer;
+  font-size: 10px;
+}
 .user-retry-btn:hover { background: var(--panel); color: var(--ink); }
 .user-retry-btn:disabled { opacity: 0.5; cursor: default; }
 .user-retry-btn svg { width: 12px; height: 12px; }
 
-/* 말풍선과 같은 줄, 왼쪽에 붙는 액션 아이콘(재시도·인용) - 하단 정렬, 세로 여백 없이 */
-.msg-user-line { display: flex; align-items: flex-end; gap: 4px; }
-.msg-user-actions { text-align: right; }
-
 /* 사용자 메시지 인용 버튼 - hover 시에만 노출 (만족도 버튼과 같은 패턴) */
-.user-quote-btn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; flex-shrink: 0; border: none; border-radius: 50%; background: var(--panel-alt); color: var(--muted); cursor: pointer; opacity: 0; transition: opacity 0.15s ease; }
-.msg-row.user:hover .user-quote-btn, .user-quote-btn:focus-visible { opacity: 1; }
+.user-quote-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+  border: none; border-radius: 50%;
+  background: var(--panel-alt); color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity 0.15s ease;
+}
+.msg-row.user:hover .user-quote-btn,
+.user-quote-btn:focus-visible { opacity: 1; }
 .user-quote-btn:hover { background: var(--panel); color: var(--ink); }
 .user-quote-btn svg { width: 12px; height: 12px; }
 

@@ -430,6 +430,12 @@ export default function ChatThreadPage() {
     userMessageId?: string,
   ) {
     setIsGenerating(true);
+    
+    // 생성 전에 미리 수신자 감지 - 이미 저장된 프로필과 이름이 일치하면 그 톤을 생성에 반영
+    const detectedBeforeGen = detectReceiverName(prompt);
+    const matchedProfile = detectedBeforeGen
+      ? receiverProfiles.find((p) => p.receiverName === detectedBeforeGen)
+      : undefined;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -694,42 +700,41 @@ export default function ChatThreadPage() {
                       ))}
                     </div>
                   )}
-                  {(m.content || m.failed) && (
-                    <div className="msg-user-line">
-                      <div className="msg-user-actions">
-                        {m.content && (
-                          <button
-                            type="button"
-                            className="user-quote-btn"
-                            onClick={() => quoteMessage(m)}
-                            aria-label="이 메시지 인용"
-                            title="이 메시지를 인용해서 다시 질문하기"
-                          >
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="9 14 4 9 9 4" />
-                              <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
-                            </svg>
-                          </button>
-                        )}
-                        {m.failed && (
-                          <button
-                            type="button"
-                            className="user-retry-btn"
-                            onClick={() => retryMessage(m)}
-                            disabled={isGenerating}
-                            aria-label="다시 시도"
-                            title="답변 생성에 실패했어요. 다시 시도하려면 클릭하세요."
-                          >
-                            재시도<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="1 4 1 10 7 10" />
-                              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      {m.content && <div className="msg-bubble user">{m.content}</div>}
-                    </div>
+                  <div className="msg-user-line">
+                  <div className="msg-user-actions">
+                    <button
+                      type="button"
+                      className="user-quote-btn"
+                      onClick={() => quoteMessage(m)}
+                      aria-label="이 메시지 인용"
+                      title="이 메시지를 인용해서 다시 질문하기"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 14 4 9 9 4" />
+                        <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+                      </svg>
+                    </button>
+                  {m.failed && (
+                    <button
+                      type="button"
+                      className="user-retry-btn"
+                      onClick={() => retryMessage(m)}
+                      disabled={isGenerating}
+                      aria-label="다시 시도"
+                      title="응답 생성에 실패했어요. 다시 시도하려면 클릭하세요."
+                    >
+                      재시도<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="1 4 1 10 7 10" />
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                      </svg>
+                    </button>
                   )}
+                    </div>
+                    <div className="msg-bubble user">{m.content}</div>
+                  </div>
+                </div>
+                    <div className="msg-bubble user">{m.content}</div>
+                  </div>
                 </div>
               ) : (
                 <div className="msg-assistant">
