@@ -9,6 +9,7 @@ Rule:
 - 고신뢰 오탈자 보정
 - 내부문서 필요 여부
 """
+import re
 
 from app.schemas.models import Typo
 from app.services.typo_models import DetectedTypo, TypoRule
@@ -30,11 +31,45 @@ TASK_TYPE_HINTS = {
     "회의 요약",
     "회의 내용을 요약",
 ],
-    "notice": ["공지", "안내문", "이벤트"],
+    "notice": [
+        "공지",
+        "안내문",
+        "이벤트",
+        "채팅방에",
+        "메신저로",
+        "슬랙에",
+        "팀즈에",
+        "Teams에",
+],
     "support": ["사과", "고객", "응대", "불만"],
     "email": ["메일", "이메일"],
 }
 
+def should_force_missing_audience(text: str, task_type: str) -> bool:
+    """
+    명시적인 메일 작성 요청인데 수신 대상이 없는 경우
+    AUDIENCE 누락을 고신뢰 규칙으로 보정한다.
+
+    KcELECTRA의 일반 8요소 판단을 대체하지 않고,
+    명백한 메일 수신자 누락 케이스에만 적용한다.
+    """
+
+    if task_type != "email":
+        return False
+
+    if not any(hint in text for hint in ("메일", "이메일")):
+        return False
+
+    recipient_patterns = (
+        r"\S+\s*(?:에게|께|한테)",
+        r"\S+\s*(?:을|를)\s*대상으로",
+        r"수신자\s*(?:는|는\s*:|:)",
+    )
+
+    return not any(
+        re.search(pattern, text)
+        for pattern in recipient_patterns
+    )
 
 TYPO_RULES = (
     # ------------------------------------------------------------

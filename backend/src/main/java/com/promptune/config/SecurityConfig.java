@@ -52,9 +52,23 @@ public class SecurityConfig {
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
 
+        // 2026-08-27: MS 연동(OAuth) 콜백에서 "Invalid CORS request"가 그대로
+        // 응답 본문에 노출되는 오류가 확인됨. MicrosoftGraphService.createAuthorizationUrl()이
+        // ResponseMode.FORM_POST를 쓰기 때문에, 로그인 완료 후 Microsoft가 렌더링하는
+        // 중간 페이지(login.microsoftonline.com)가 CSP sandbox로 격리돼 있어 이 페이지가
+        // 우리 콜백 URL로 보내는 POST 요청의 Origin 헤더가 문자열 그대로 "null"이 된다 -
+        // 이건 잘 알려진 동작이라 allowedOrigins("null") 자체는 올바르게 이미 반영돼 있었음.
+        // 문제는 MicrosoftIntegrationController.callback()이 @RequestMapping(method =
+        // {GET, POST})로 GET/POST 둘 다 받도록 만들어져 있는데(Microsoft 응답 모드가
+        // query로 바뀌거나, 재시도/리다이렉트 과정에서 GET으로 들어오는 경우까지 대비),
+        // 여기 CORS 설정은 allowedMethods를 POST 하나로만 좁혀놔서 - 실제로 GET으로
+        // 들어오는 케이스(또는 Microsoft/프록시 쪽에서 예상과 다르게 GET을 쓰는 케이스)는
+        // Spring의 DefaultCorsProcessor가 메서드 불일치로 요청 자체를 거부해서
+        // "Invalid CORS request"를 그대로 응답 본문에 써버린다. 컨트롤러가 실제로
+        // 허용하는 메서드(GET, POST)와 CORS 설정을 일치시킨다.
         CorsConfiguration microsoftCallback = new CorsConfiguration();
         microsoftCallback.setAllowedOrigins(List.of("null"));
-        microsoftCallback.setAllowedMethods(List.of("POST"));
+        microsoftCallback.setAllowedMethods(List.of("GET", "POST"));
         microsoftCallback.setAllowedHeaders(List.of("*"));
         microsoftCallback.setAllowCredentials(false);
 

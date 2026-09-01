@@ -40,9 +40,10 @@ export default function ShellSwitch({ children }: { children: React.ReactNode })
         ? "chat"
         : PATH_TO_KEY[topSegment] ?? "newChat";
 
-  // 파일관리/히스토리/대시보드는 표·카드가 많아 채팅보다 넓은 폭이 필요해서 .page-wide 적용
-  const WIDE_PAGES = ["/files", "/history", "/dashboard"];
-  const isWide = WIDE_PAGES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+  // 파일관리/히스토리/대시보드/설정 - 표·카드가 많아 최소 폭(733px)이 필요한 페이지들.
+  // 이 페이지들은 좌우 padding 없이, position(가로 중앙)만으로 배치하는 .page-fixed를 사용.
+  const FIXED_WIDTH_PAGES = ["/files", "/history", "/dashboard", "/settings"];
+  const isFixedWidth = FIXED_WIDTH_PAGES.some((p) => pathname === p || pathname.startsWith(p + "/"));
 
   return (
     <AppShell
@@ -54,7 +55,7 @@ export default function ShellSwitch({ children }: { children: React.ReactNode })
         router.push("/");
       }}
     >
-      <div className={`page ${isWide ? "page-wide" : ""}`}>{children}</div>
+      <div className={isFixedWidth ? "page-fixed" : "page"}>{children}</div>
     </AppShell>
   );
 }

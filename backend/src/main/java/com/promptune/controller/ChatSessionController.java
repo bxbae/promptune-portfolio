@@ -20,12 +20,15 @@ public class ChatSessionController {
     private final ChatSessionRepository chatSessionRepository;
     private final UserRepository userRepository;
     private final com.promptune.repository.PromptSessionRepository promptSessionRepository;
+    private final com.promptune.repository.DocumentRepository documentRepository;
 
     public ChatSessionController(ChatSessionRepository chatSessionRepository, UserRepository userRepository,
-                                  com.promptune.repository.PromptSessionRepository promptSessionRepository) {
+                                  com.promptune.repository.PromptSessionRepository promptSessionRepository,
+                                  com.promptune.repository.DocumentRepository documentRepository) {
         this.chatSessionRepository = chatSessionRepository;
         this.userRepository = userRepository;
         this.promptSessionRepository = promptSessionRepository;
+        this.documentRepository = documentRepository;
     }
 
     @PostMapping
@@ -71,8 +74,15 @@ public class ChatSessionController {
         }
 
         return promptSessionRepository.findByChatSessionIdOrderByCreatedAtAsc(id).stream()
-                .map(p -> new com.promptune.dto.ChatSessionDtos.MessageResponse(
-                        p.getId(), p.getOriginalText(), p.getAiResponseText(), p.getTaskType(), p.getCreatedAt(), p.getSatisfaction()))
+                .map(p -> {
+                    java.util.List<com.promptune.dto.ChatSessionDtos.DocumentSummary> attachments =
+                            documentRepository.findByPromptSessionId(p.getId()).stream()
+                                    .map(doc -> new com.promptune.dto.ChatSessionDtos.DocumentSummary(doc.getId(), doc.getTitle()))
+                                    .toList();
+                    return new com.promptune.dto.ChatSessionDtos.MessageResponse(
+                            p.getId(), p.getOriginalText(), p.getAiResponseText(), p.getTaskType(),
+                            p.getCreatedAt(), p.getSatisfaction(), attachments);
+                })
                 .toList();
     }
 

@@ -1,0 +1,5 @@
+﻿services:
+  ai-service:
+    environment:
+      USE_REAL_IMPROVEMENT: "true"
+      USE_REAL_VALIDATION: "true"

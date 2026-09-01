@@ -18,6 +18,7 @@ import {
 import { listReceiverProfiles, ReceiverProfile } from "@/api/receiverProfiles";
 import { getPreference, UserPreference } from "@/api/userPreferences";
 import { listActivityLogs } from "@/api/activityLogs";
+import { PREF_LABEL } from "@/lib/preferenceQuestions";
 
 // 최근 7일 배열, 오래된 순
 function last7Days(): string[] {
@@ -37,15 +38,8 @@ function weekdayLabel(dateStr: string): string {
   return WEEKDAY_KO[d.getDay()];
 }
 
-// 온보딩 value -> 한글 라벨
-const PREF_LABEL: Record<string, string> = {
-  fast: "빠르게", accurate: "정확하게",
-  brief: "간결하게", detailed: "자세하게",
-  keep: "최대한 유지", improve: "적극적으로 보완",
-};
-
 // 업무유형 라벨별 색상 팔레트 (실데이터 키 개수가 가변이라 순서대로 배정)
-const TASK_TYPE_COLORS = ["#55806A", "#7FA391", "#B7AFB2", "#E64B3C", "#F2A99A", "#D8D3D0", "#EFEBE9", "#A9C4B8"];
+const TASK_TYPE_COLORS = ["#55806A", "#7FA391", "#B7AFB2", "#dd5e3e", "#F2A99A", "#D8D3D0", "#EFEBE9", "#A9C4B8"];
 
 const KNOWN_TASK_TYPES = ["email", "report", "notice", "application", "support", "report_internal", "notice_internal"];
 
@@ -221,8 +215,8 @@ export default function DashboardPage() {
                   <div
                     key={t.label}
                     className="dash-tasktype-stackbar-seg"
-                    style={{ width: `${t.pct}%`, background: t.color }}
                     title={`${t.label} ${t.pct}%`}
+                    style={{ flexGrow: t.count, flexBasis: 0, background: t.color }}
                   />
                 ))}
               </div>

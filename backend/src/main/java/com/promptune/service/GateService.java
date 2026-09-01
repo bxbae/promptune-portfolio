@@ -14,7 +14,10 @@ public class GateService {
     // 주민번호·전화번호 등 PII 패턴 (예시)
     private static final Pattern PII = Pattern.compile(
             "\\d{6}[- ]?\\d{7}|01[0-9][- ]?\\d{3,4}[- ]?\\d{4}");
-    private static final String[] BANNED = {"금칙어예시1", "금칙어예시2"};
+    private static final String[] BANNED = {
+            "시발", "씨발", "개새끼",           // 비속어 예시
+            "내부 매출", "미공개 실적", "인수합병" // 회사 기밀 관련 예시
+    };
 
     public GateResult check(String text) {
         if (PII.matcher(text).find()) {

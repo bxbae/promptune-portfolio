@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from app.services.validation.rule_validator import validate_rules
@@ -7,6 +8,14 @@ from app.services.validation.semantic_validator import validate_semantic
 
 
 DEFAULT_SEMANTIC_THRESHOLD = 0.65
+
+ENABLE_SEMANTIC_VALIDATION_TELEMETRY = (
+    os.getenv(
+        "ENABLE_SEMANTIC_VALIDATION_TELEMETRY",
+        "false",
+    ).strip().lower()
+    == "true"
+)
 
 
 @dataclass
@@ -29,27 +38,31 @@ def validate_response(
         generated=generated,
     )
 
-    semantic_result = validate_semantic(
-        original=original,
-        generated=generated,
-        threshold=semantic_threshold,
-    )
+    semantic_ok = True
+    semantic_score = -1.0
+    semantic_issues: list[str] = []
 
-    rule_ok = rule_result.passed
-    semantic_ok = semantic_result.semantic_ok
+    if ENABLE_SEMANTIC_VALIDATION_TELEMETRY:
+        semantic_result = validate_semantic(
+            original=original,
+            generated=generated,
+            threshold=semantic_threshold,
+        )
+
+        semantic_ok = semantic_result.semantic_ok
+        semantic_score = semantic_result.score
+        semantic_issues = semantic_result.issues
 
     issues = [
         *rule_result.issues,
-        *semantic_result.issues,
+        *semantic_issues,
     ]
 
-    passed = rule_ok and semantic_ok
-
     return FinalValidationResult(
-        passed=passed,
-        rule_ok=rule_ok,
+        passed=rule_result.passed,
+        rule_ok=rule_result.passed,
         semantic_ok=semantic_ok,
-        semantic_score=semantic_result.score,
+        semantic_score=semantic_score,
         facts_preserved=rule_result.facts_preserved,
         issues=issues,
-)
+    )

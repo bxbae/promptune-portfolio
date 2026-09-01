@@ -3,10 +3,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-import torch
 
 from app.schemas.models import ConversationMessage
-from app.services.hcx_runtime import HCX_MODEL_LOCK, load_hcx_runtime
+from app.services.retrieval.query_intent import extract_external_entity_subject
+from app.services.conversation_memory import (
+    classify_conversation_context,
+    is_memory_set_request,
+)
 
 
 @dataclass(frozen=True)
@@ -41,30 +44,59 @@ def _contains_sensitive_text(text: str) -> bool:
     return any(marker in lowered for marker in _SENSITIVE_MARKERS)
 
 
-def _build_history_text(
+_VERIFICATION_MARKERS = (
+    "확실해",
+    "확실한가",
+    "맞아",
+    "맞나요",
+    "진짜야",
+    "정말이야",
+    "근거 있어",
+    "근거있어",
+    "출처 맞아",
+    "출처가 맞아",
+    "다시 확인",
+    "재확인",
+)
+
+
+def _is_verification_followup(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+
+    return any(
+        marker in lowered
+        for marker in _VERIFICATION_MARKERS
+    )
+
+
+def _find_previous_substantive_user_query(
     history: list[ConversationMessage],
 ) -> str:
-    parts: list[str] = []
+    for message in reversed(history):
+        if message.role != "user":
+            continue
 
-    for message in history[-8:]:
         content = message.content.strip()
 
         if not content:
             continue
 
-        if len(content) > 700:
-            content = content[:700]
+        if _is_verification_followup(content):
+            continue
 
-        role = "사용자" if message.role == "user" else "어시스턴트"
-        parts.append(f"{role}: {content}")
+        return content
 
-    return "\n".join(parts)
+    return ""
 
 
 def _find_recent_document_reference(
     history: list[ConversationMessage],
 ) -> str | None:
-    pattern = re.compile(
+    attachment_pattern = re.compile(
+        r"title=([^/\n]+?\.(?:pdf|docx|doc|xlsx|xls|pptx|txt|md))",
+        flags=re.IGNORECASE,
+    )
+    generic_pattern = re.compile(
         r'([^\s"\'<>]+?\.(?:pdf|docx|doc|xlsx|xls|pptx|txt|md))',
         flags=re.IGNORECASE,
     )
@@ -75,10 +107,15 @@ def _find_recent_document_reference(
         if not content:
             continue
 
-        matches = pattern.findall(content)
+        attachment_matches = attachment_pattern.findall(content)
 
-        if matches:
-            return matches[-1].rstrip(".,!?)]}").strip()
+        if attachment_matches:
+            return attachment_matches[-1].rstrip(".,!?)]}").strip()
+
+        generic_matches = generic_pattern.findall(content)
+
+        if generic_matches:
+            return generic_matches[-1].rstrip(".,!?)]}").strip()
 
     return None
 
@@ -90,6 +127,9 @@ def _replace_document_reference(
     markers = (
         "그 문서",
         "그 파일",
+        "그 이력서",
+        "그 보고서",
+        "거기서",
         "해당 문서",
         "해당 파일",
         "아까 문서",
@@ -105,136 +145,118 @@ def _replace_document_reference(
     return query
 
 
-def _rewrite_query_with_hcx(
+_ABOUT_PREVIOUS_SUBJECT_RE = re.compile(
+    r"^\s*(?P<subject>.+?)"
+    r"\s*에\s*(?:대|관)(?:해|하여)"
+)
+
+_FOLLOWUP_ENTITY_MARKERS = (
+    "그 회사",
+    "그 사람",
+    "그분",
+    "그 팀",
+    "그 그룹",
+    "그 프로젝트",
+    "그 서비스",
+    "그 제품",
+    "그거",
+    "그걸",
+)
+
+
+def _extract_previous_focus(
+    query: str,
+) -> str | None:
+    """
+    직전 사용자 질문에서 명시적인 외부 대상을 가볍게 복원한다.
+
+    LLM을 사용하지 않는다.
+    """
+    text = str(query or "").strip()
+
+    if not text:
+        return None
+
+    entity = extract_external_entity_subject(
+        text
+    )
+
+    if entity:
+        return entity
+
+    match = _ABOUT_PREVIOUS_SUBJECT_RE.match(
+        text
+    )
+
+    if match:
+        subject = (
+            match.group("subject")
+            .strip(" ,.!?")
+        )
+
+        if 2 <= len(subject) <= 80:
+            return subject
+
+    return None
+
+
+def _resolve_followup_query_without_hcx(
     query: str,
     history: list[ConversationMessage],
 ) -> str:
-    tokenizer, model, device = load_hcx_runtime()
+    """
+    검색용 follow-up query를 HCX 없이 복원한다.
 
-    messages = [
-        {
-            "role": message.role,
-            "content": message.content.strip(),
-        }
-        for message in history[-8:]
-        if message.content.strip()
-    ]
+    1. 현재 문장에 지시대명사가 있으면 직전 사용자 질문의 명시적
+       subject를 추출해 치환한다.
+    2. subject를 안전하게 추출하지 못하면 이전 사용자 질문과 현재
+       요청을 함께 전달한다.
+    3. 지시대명사가 없으면 현재 query를 그대로 유지한다.
+    """
+    current = str(query or "").strip()
 
-    messages.append({
-        "role": "user",
-        "content": (
-            "지금부터 답변하지 말고 검색용 질문만 작성해. "
-            "아래 요청에서 '그 회사', '그 문서', '그 프로젝트', '그 사람', "
-            "'그거'처럼 생략된 대상을 앞 대화에서 확인되는 실제 이름으로 바꿔. "
-            "없는 정보는 만들지 말고 한 줄만 출력해.\n\n"
-            f"검색 요청: {query}"
-        ),
-    })
+    if not current:
+        return current
 
-    inputs = tokenizer.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
+    has_reference = any(
+        marker in current
+        for marker in _FOLLOWUP_ENTITY_MARKERS
     )
 
-    inputs = inputs.to(device)
-    input_length = inputs["input_ids"].shape[1]
+    if not has_reference:
+        return current
 
-    with HCX_MODEL_LOCK:
-        with torch.inference_mode():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=80,
-                do_sample=False,
-                eos_token_id=tokenizer.eos_token_id,
-                stop_strings=["<|endofturn|>", "<|stop|>"],
-                tokenizer=tokenizer,
-            )
-
-    generated = outputs[0][input_length:]
-    text = tokenizer.decode(
-        generated,
-        skip_special_tokens=True,
-    ).strip()
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    rewritten = lines[0] if lines else ""
-
-    rewritten = re.sub(
-        r"^(검색 질문|검색 요청|QUERY)\s*:\s*",
-        "",
-        rewritten,
-        flags=re.IGNORECASE,
-    ).strip()
-
-    context_markers = (
-        "그 회사",
-        "그 문서",
-        "그 파일",
-        "그 프로젝트",
-        "그 사람",
-        "그거",
-        "그걸",
-        "해당 문서",
-        "해당 파일",
-    )
-
-    rewrite_failed = (
-        not rewritten
-        or len(rewritten) > 400
-        or rewritten.startswith("{")
-        or rewritten.lower().startswith("tool:")
-        or rewritten == query
-        or any(marker in rewritten for marker in context_markers)
-    )
-
-    if not rewrite_failed:
-        intent_markers = (
-            "검색",
-            "찾아",
-            "알려",
-            "정리",
-            "요약",
-            "작성",
-            "비교",
-            "설명",
-            "보여",
-            "만들",
-            "확인",
+    previous_query = (
+        _find_previous_substantive_user_query(
+            history
         )
+    )
 
-        has_intent = any(
-            marker in rewritten
-            for marker in intent_markers
-        )
+    if not previous_query:
+        return current
 
-        if not has_intent:
-            for marker in context_markers:
-                if marker in query:
-                    resolved_query = query.replace(
-                        marker,
-                        rewritten,
-                        1,
-                    )
-                    return resolved_query
+    focus = _extract_previous_focus(
+        previous_query
+    )
+
+    if focus:
+        rewritten = current
+
+        for marker in _FOLLOWUP_ENTITY_MARKERS:
+            if marker in rewritten:
+                rewritten = rewritten.replace(
+                    marker,
+                    focus,
+                    1,
+                )
+                break
 
         return rewritten
 
-    previous_user = next(
-        (
-            message.content.strip()
-            for message in reversed(history)
-            if message.role == "user" and message.content.strip()
-        ),
-        "",
+    return (
+        f"{previous_query} / "
+        f"현재 요청: {current}"
     )
-
-    if previous_user:
-        return f"{previous_user} / 현재 요청: {query}"
-
-    return query
 
 
 def resolve_conversation_retrieval(
@@ -243,7 +265,23 @@ def resolve_conversation_retrieval(
 ) -> ConversationRetrievalContext:
     original = query.strip()
 
-    if not original or not history:
+    if not original:
+        return ConversationRetrievalContext(
+            query=original,
+            route_override=None,
+            used_history=False,
+        )
+
+    # 사용자가 새 사실을 "기억해줘/기억해둬"라고 저장하는 요청은
+    # 검색이나 RAG 대상이 아니다.
+    if is_memory_set_request(original):
+        return ConversationRetrievalContext(
+            query=original,
+            route_override="no_retrieval",
+            used_history=False,
+        )
+
+    if not history:
         return ConversationRetrievalContext(
             query=original,
             route_override=None,
@@ -258,10 +296,40 @@ def resolve_conversation_retrieval(
         )
 
     text = original.lower()
+    context_mode = classify_conversation_context(original, history)
+
+    # "확실해?", "맞아?", "근거 있어?"처럼 직전 답변의 사실 확인을
+    # 요청하는 발화는 그 짧은 문장 자체를 검색어로 사용하지 않는다.
+    # 직전의 실질적인 사용자 질문을 그대로 재사용해서 동일 대상을
+    # 다시 Retrieval 하도록 한다. HCX query rewrite는 사용하지 않는다.
+    if _is_verification_followup(original):
+        previous_query = _find_previous_substantive_user_query(
+            history
+        )
+
+        if previous_query:
+            return ConversationRetrievalContext(
+                query=previous_query,
+                route_override=None,
+                used_history=True,
+            )
+
+    # "내 프로젝트명이 뭐라고?", "전에 말한 담당자 누구였지?"처럼
+    # 사용자가 과거에 직접 말한 사실을 회상하는 질문은 Web/BGE 검색 대상이 아니다.
+    # 실제 답변 근거 선택은 generate_hcx의 build_recall_evidence가 담당한다.
+    if context_mode == "memory_recall":
+        return ConversationRetrievalContext(
+            query=original,
+            route_override="no_retrieval",
+            used_history=True,
+        )
 
     contextual_internal_markers = (
         "그 문서",
         "그 파일",
+        "그 이력서",
+        "그 보고서",
+        "거기서",
         "해당 문서",
         "해당 파일",
         "아까 문서",
@@ -310,6 +378,12 @@ def resolve_conversation_retrieval(
     )
 
     followup_markers = (
+        "거기서",
+        "무슨 내용",
+        "내용이야",
+        "내용 알려",
+        "프로젝트만",
+        "경력만",
         "그거",
         "그걸",
         "그것",
@@ -351,10 +425,38 @@ def resolve_conversation_retrieval(
         for marker in external_markers
     )
 
-    is_followup = any(
+    marker_followup = any(
         marker in text
         for marker in followup_markers
     )
+
+    entity_reference_followup = any(
+        marker in original
+        for marker in _FOLLOWUP_ENTITY_MARKERS
+    )
+
+    is_followup = (
+        context_mode == "immediate_followup"
+        or marker_followup
+        or entity_reference_followup
+    )
+
+    # "누구였지/뭐였지/어디였지" 자체는 대화 참조의 증거가 아니다.
+    # classifier가 standalone으로 판단했다면 기존 broad marker가
+    # history를 다시 끌어오지 못하게 한다.
+    if (
+        context_mode == "standalone"
+        and any(
+            marker in text
+            for marker in (
+                "누구였",
+                "뭐였",
+                "어디였",
+                "뭐라고 했",
+            )
+        )
+    ):
+        is_followup = False
 
     if has_contextual_internal:
         document_name = _find_recent_document_reference(history)
@@ -389,7 +491,10 @@ def resolve_conversation_retrieval(
 
     if has_explicit_internal:
         rewritten = (
-            _rewrite_query_with_hcx(original, history)
+            _resolve_followup_query_without_hcx(
+                original,
+                history,
+            )
             if is_followup
             else original
         )
@@ -402,7 +507,10 @@ def resolve_conversation_retrieval(
 
     if has_external:
         rewritten = (
-            _rewrite_query_with_hcx(original, history)
+            _resolve_followup_query_without_hcx(
+                original,
+                history,
+            )
             if is_followup
             else original
         )

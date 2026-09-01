@@ -57,6 +57,11 @@ export async function deleteChatSession(id: number): Promise<void> {
   if (!res.ok) throw new Error(`채팅 삭제 실패: ${res.status}`);
 }
 
+export interface MessageAttachment {
+  id: number;
+  title: string;
+}
+
 export interface ChatMessage {
   id: number;
   prompt: string;
@@ -64,6 +69,7 @@ export interface ChatMessage {
   taskType: string | null;
   createdAt: string;
   satisfaction: "good" | "bad" | null;
+  attachments?: MessageAttachment[];
 }
 
 // GET /api/chat-sessions/{id}/messages - 세션 하나의 지난 메시지 목록 (시간순)

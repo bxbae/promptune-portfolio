@@ -34,11 +34,16 @@ services:
       USE_REAL_IMPROVEMENT: "${USE_REAL_IMPROVEMENT:-false}"
       USE_REAL_GENERATION: "${USE_REAL_GENERATION:-false}"
       USE_REAL_TITLE_SUMMARY: "${USE_REAL_TITLE_SUMMARY:-false}"
-      USE_REAL_RETRIEVAL: "${USE_REAL_RETRIEVAL:-false}"
+      USE_REAL_RETRIEVAL: "${USE_REAL_RETRIEVAL:-true}"
       HF_TOKEN: "${HF_TOKEN:-}"
-      HF_HCX_MODEL: "${HF_HCX_MODEL:-naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B}"
-      HF_HCX_DEVICE: "${HF_HCX_DEVICE:-cpu}"
+      HF_HCX_MODEL: "${HF_HCX_MODEL:-naver-hyperclovax/HyperCLOVAX-SEED-Vision-Instruct-3B}"
+      HF_HCX_DEVICE: "${HF_HCX_DEVICE:-auto}"
+      HF_HCX_DTYPE: "${HF_HCX_DTYPE:-auto}"
       HF_HOME: /root/.cache/huggingface
+      BGE_M3_MODEL: "${BGE_M3_MODEL:-BAAI/bge-m3}"
+      BGE_M3_DEVICE: "${BGE_M3_DEVICE:-auto}"
+      BGE_M3_USE_FP16: "${BGE_M3_USE_FP16:-auto}"
+      BGE_M3_BATCH_SIZE: "${BGE_M3_BATCH_SIZE:-4}"
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: promptune

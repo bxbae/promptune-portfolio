@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { listChatSessions, ChatSession } from "@/api/chatSessions";
+import { listChatSessions, updateChatTitle, deleteChatSession, ChatSession } from "@/api/chatSessions";
+import ConfirmDialog from "@/components/ConfirmDialog";
 
 function timeAgo(iso: string) {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -16,10 +17,6 @@ function timeAgo(iso: string) {
   return `${Math.floor(day / 7)}주 전`;
 }
 
-const TASK_LABEL: Record<string, string> = {
-  email: "이메일", report: "보고서", notice: "공지", application: "신청서", support: "문의",
-};
-
 const PAGE_SIZE = 10;
 
 export default function ChatsPage() {
@@ -28,6 +25,12 @@ export default function ChatsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
+
+  const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     listChatSessions()
@@ -43,7 +46,7 @@ export default function ChatsPage() {
       if (chatSessionId == null) return;
       setChats((prev) => prev.filter((c) => c.id !== chatSessionId));
     }
-    
+
     window.addEventListener("chat-session-deleted", handleDeleted);
     return () => window.removeEventListener("chat-session-deleted", handleDeleted);
   }, []);
@@ -54,8 +57,72 @@ export default function ChatsPage() {
     if (page > maxPage) setPage(maxPage);
   }, [chats, page]);
 
+  // 메뉴 바깥 클릭 시 수정/삭제 닫기
+  useEffect(() => {
+    if (openMenuId === null) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (!(e.target as HTMLElement).closest(".chat-list-item-row")) {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [openMenuId]);
+
+  // 제목 수정
+  function startEditTitle(c: ChatSession) {
+    setOpenMenuId(null);
+    setEditingId(c.id);
+    setEditTitle(c.title || `대화 #${c.id}`);
+  }
+
+  // 제목 수정 저장
+  async function saveEditTitle(id: number) {
+    const trimmed = editTitle.trim();
+    if (!trimmed) {
+      setEditingId(null);
+      return;
+    }
+    try {
+      const updated = await updateChatTitle(id, trimmed);
+      setChats((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      // 사이드바(AppShell)는 "chat-session-updated"를 이미 듣고 있어서, 쏘기만 하면 목록이 같이 갱신됨
+      window.dispatchEvent(new CustomEvent("chat-session-updated"));
+    } catch (e: any) {
+      alert(e.message || "제목 수정에 실패했습니다.");
+    } finally {
+      setEditingId(null);
+    }
+  }
+
+  // 채팅 삭제 - 모달 띄움
+  function handleDeleteChat(c: ChatSession) {
+    setOpenMenuId(null);
+    setDeleteTarget(c);
+  }
+
+  async function confirmDeleteChat() {
+    if (!deleteTarget) return;
+
+    setDeleting(true);
+    try {
+      await deleteChatSession(deleteTarget.id);
+      setChats((prev) => prev.filter((x) => x.id !== deleteTarget.id));
+      // AppShell 사이드바가 이미 듣고 있는 이벤트 재사용 - 이 페이지에서 지워도 사이드바 목록에서 같이 빠짐
+      window.dispatchEvent(
+        new CustomEvent("chat-session-deleted", { detail: { chatSessionId: deleteTarget.id } })
+      );
+      setDeleteTarget(null);
+    } catch (e: any) {
+      alert(e.message || "삭제에 실패했습니다.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+
   return (
-    <div>
+    <div className="chat-list-page">
       <h1>채팅</h1>
 
       {loading && <div style={{ color: "var(--muted)" }}>불러오는 중...</div>}
@@ -71,19 +138,52 @@ export default function ChatsPage() {
         <>
           <div className="chat-list">
             {chats.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((c) => (
-              <button
-                key={c.id}
-                className="chat-list-item"
-                onClick={() => router.push(`/chat/${c.id}`)}
-              >
-                <span className="chat-list-title">{c.title || `대화 #${c.id}`}</span>
-                <span className="chat-list-meta">
-                  {/* {c.taskType && (
-                    <span className="chat-list-badge">{TASK_LABEL[c.taskType] ?? c.taskType}</span>
-                  )} */}
-                  <span className="chat-list-time">{timeAgo(c.updatedAt)}</span>
-                </span>
-              </button>
+              <div className="chat-list-item-row" key={c.id}>
+                {editingId === c.id ? (
+                  <input
+                    className="chat-list-edit-input"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEditTitle(c.id);
+                      if (e.key === "Escape") setEditingId(null);
+                    }}
+                    onBlur={() => saveEditTitle(c.id)}
+                    autoFocus
+                  />
+                ) : (
+                  <>
+                    <button
+                      className="chat-list-item"
+                      onClick={() => router.push(`/chat/${c.id}`)}
+                    >
+                      <span className="chat-list-title">{c.title || `대화 #${c.id}`}</span>
+                      <span className="chat-list-meta">
+                        <span className="chat-list-time">{timeAgo(c.updatedAt)}</span>
+                      </span>
+
+                      <button
+                        type="button"
+                        className="chat-list-menu-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === c.id ? null : c.id);
+                        }}
+                        aria-label="채팅 옵션"
+                      >
+                        <img src="/icons/dots.png" alt="" />
+                      </button>
+                    </button>
+
+                    {openMenuId === c.id && (
+                      <div className="chat-list-menu">
+                        <button onClick={() => startEditTitle(c)}>수정</button>
+                        <button className="danger" onClick={() => handleDeleteChat(c)}>삭제</button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             ))}
           </div>
 
@@ -108,6 +208,17 @@ export default function ChatsPage() {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="채팅 삭제"
+        message={`"${deleteTarget?.title || `대화 #${deleteTarget?.id}`}" 대화를 삭제할까요?`}
+        confirmLabel="삭제"
+        danger
+        loading={deleting}
+        onConfirm={confirmDeleteChat}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

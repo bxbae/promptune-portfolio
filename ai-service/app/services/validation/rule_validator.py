@@ -6,12 +6,18 @@ from dataclasses import dataclass, field
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
+def extract_numbers(text: str) -> set[str]:
+    return set(_NUMBER_RE.findall(text))
+
+
 _MAX_LENGTH_RE = re.compile(
     r"(?P<count>\d+)\s*(?:자|글자)\s*(?:이내|이하)"
 )
 
 _ITEM_COUNT_RE = re.compile(
-    r"(?P<count>\d+)\s*(?:"
+    r"(?P<count>\d+)"
+    r"(?:\s*~\s*(?P<max_count>\d+))?"
+    r"\s*(?:"
     r"개(?:의)?\s*(?:항목|내용|포인트)"
     r"|개\s*(?:로|으로)\s*(?:정리|작성|제시|요약)"
     r"|가지(?:의)?\s*(?:항목|내용|포인트)"
@@ -22,6 +28,29 @@ _ITEM_COUNT_RE = re.compile(
 _LIST_ITEM_RE = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)]\s+)",
     re.MULTILINE,
+)
+
+# 2026-08-26: PrompTune 8요소(FORMAT/LENGTH) 다듬기 지시문에 붙는 숫자
+# ("3문단으로", "3~4줄로", "5문장 이내로" 등)가 "반드시 결과에 그대로
+# 남아있어야 하는 사실"로 오인되어, 모델이 정확히 그 형식으로 답해도
+# 본문에 그 숫자 토큰 자체가 없으면(당연히 없어도 됨) facts_preserved가
+# False로 판정되는 사례가 확인됨 — "2026년 8월 26일 기준으로 이강인 선수의
+# 프로필을 안내해줘...3문단으로..." 질의에서 generate→validate가 재시도까지
+# 두 번 다 이 오탐으로 실패해 "검증을 통과하는 답변을 생성하지 못했습니다"
+# 503으로 노출된 사례로 재현 확인됨.
+#
+# 같은 문제가 2026-08-25에 pipeline_mock.validate()에서도 한 번 확인되어
+# 거기엔 이미 제외 처리(_FORMAT_INSTRUCTION_NUM_RE)가 있었지만, 실제
+# USE_REAL_VALIDATION=true일 때 쓰이는 이 모듈(rule_validator)에는 그 수정이
+# 반영되지 않아 회귀가 재발했음 — 여기서도 같은 취지로 제외 처리를 추가한다.
+#
+# "개"/"가지"는 건드리지 않는다 — 이미 _ITEM_COUNT_RE가 "N개 항목"류만 정확히
+# 서식 지시로 구분하고 있고, "사과 3개"처럼 실제 수량 사실인 경우와 구분해야
+# 하기 때문(아래 test_product_quantity_is_treated_as_fact_number 참고).
+# "자/글자"도 이미 _MAX_LENGTH_RE가 처리한다.
+_FORMAT_DIRECTIVE_NUMBER_RE = re.compile(
+    r"\d+(?:~\d+)?\s*(?:문단|문장|줄|번째|단어|페이지|포인트|배|위|점)"
+    r"\s*(?:이내로|이내|이상|이하|으로|로)?"
 )
 
 _MARKDOWN_TABLE_SEPARATOR_RE = re.compile(
@@ -79,14 +108,29 @@ def _validate_item_count(
     if match is None:
         return True
 
-    expected_count = int(match.group("count"))
+    min_count = int(match.group("count"))
+    max_count_text = match.group("max_count")
+    max_count = (
+        int(max_count_text)
+        if max_count_text is not None
+        else min_count
+    )
+
+    if max_count < min_count:
+        min_count, max_count = max_count, min_count
+
     actual_count = len(_LIST_ITEM_RE.findall(generated))
 
-    if actual_count == expected_count:
+    if min_count <= actual_count <= max_count:
         return True
 
+    requested = (
+        f"{min_count}개"
+        if min_count == max_count
+        else f"{min_count}~{max_count}개"
+    )
     issues.append(
-        f"항목 개수 조건 위반: 요청 {expected_count}개, 실제 {actual_count}개"
+        f"항목 개수 조건 위반: 요청 {requested}, 실제 {actual_count}개"
     )
     return False
 
@@ -144,6 +188,23 @@ def _constraint_number_spans(original: str) -> list[tuple[int, int]]:
             number_start = match.start("count")
             number_end = match.end("count")
             spans.append((number_start, number_end))
+
+            # "2~3가지로 정리"처럼 범위형 항목 수 조건에서는
+            # 상한 숫자도 사실 숫자가 아니라 출력 제약 숫자다.
+            if "max_count" in match.groupdict():
+                max_count = match.group("max_count")
+                if max_count is not None:
+                    spans.append(
+                        (
+                            match.start("max_count"),
+                            match.end("max_count"),
+                        )
+                    )
+
+    # 전체 매치 구간을 그대로 쓴다 (named group이 없고, "3~4줄"처럼 숫자가
+    # 둘 이상 붙는 범위 표현도 통째로 제외해야 하므로).
+    for match in _FORMAT_DIRECTIVE_NUMBER_RE.finditer(original):
+        spans.append(match.span())
 
     return spans
 

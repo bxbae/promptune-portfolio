@@ -30,6 +30,24 @@ server {
 
     client_max_body_size 20m;
 
+    # 2026-08-25: /api/execute는 real HyperCLOVA X 답변 생성(USE_REAL_GENERATION)이
+    # CPU에서 최대 768토큰까지 순차 생성하느라 60초(nginx 기본 timeout)를 넘기는 경우가
+    # 있어서, 응답을 다 만들어놓고도(backend/ai-service 로그엔 200 OK) nginx가 먼저
+    # 504로 끊어버리는 문제가 있었음. exact match(=)라서 아래 일반 /api/ 블록보다
+    # 우선 적용됨 — 이 경로만 넉넉하게 늘리고 나머지 /api/*는 기존 60초 유지.
+    location = /api/execute {
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
     # Spring Security OAuth2 로그인 관련 경로 — backend로
     location ^~ /api/ {
         proxy_pass http://backend:8080;
@@ -39,6 +57,13 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
         proxy_set_header X-Forwarded-Port 443;
+
+        # /api/execute가 HCX 생성+validate까지 포함해 nginx 기본 타임아웃(60초)을
+        # 넘기는 경우가 있어 504가 발생함 (2026-08-25 확인). 실제 처리시간 기준으로
+        # 넉넉하게 설정. 근본 원인(AI 처리 속도)은 별도로 승득님이 확인 중.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
     }
 
     location ^~ /login {

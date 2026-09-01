@@ -8,9 +8,14 @@ import com.promptune.domain.ModelUsageLog;
 import com.promptune.repository.ModelUsageLogRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -197,21 +202,111 @@ public class AiServiceClient {
         }
     }
 
+    public Map<String, Object> indexDocument(
+            Long documentId,
+            Long ownerUserId,
+            String fileType,
+            byte[] fileBytes,
+            String filename) {
+
+        long start = System.currentTimeMillis();
+
+        try {
+            MultiValueMap<String, Object> body =
+                    new LinkedMultiValueMap<>();
+
+            ByteArrayResource resource =
+                    new ByteArrayResource(fileBytes) {
+                        @Override
+                        public String getFilename() {
+                            return filename == null || filename.isBlank()
+                                    ? "document." + fileType
+                                    : filename;
+                        }
+                    };
+
+            body.add("document_id", documentId);
+            body.add("owner_user_id", ownerUserId);
+            body.add("file_type", fileType);
+            body.add("file", resource);
+
+            Map result = client.post()
+                    .uri("/api/ai/index-document")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(body)
+                    .retrieve()
+                    .body(Map.class);
+
+            log(
+                    "ai-service",
+                    "/api/ai/index-document",
+                    start,
+                    "success");
+
+            return result;
+
+        } catch (Exception e) {
+            log(
+                    "ai-service",
+                    "/api/ai/index-document",
+                    start,
+                    "error");
+            throw e;
+        }
+    }
+
+
     // Retrieval Router/Orchestrator 연동 (승연님 PR #67) — 내부문서/웹검색 여부까지 통째로 판단·실행
     public Map<String, Object> retrievalExecute(
             String query,
             Long ownerUserId,
             int topK,
-            List<Map<String, String>> history) {
+            List<Map<String, String>> history,
+            List<Long> documentIds,
+            boolean useWebSearch) {
+
+        return retrievalExecute(
+                query,
+                ownerUserId,
+                topK,
+                history,
+                documentIds,
+                useWebSearch,
+                Map.of());
+    }
+
+    public Map<String, Object> retrievalExecute(
+            String query,
+            Long ownerUserId,
+            int topK,
+            List<Map<String, String>> history,
+            List<Long> documentIds,
+            boolean useWebSearch,
+            Map<String, String> routingUserContext) {
 
         long start = System.currentTimeMillis();
 
         try {
-            Map<String, Object> body = Map.of(
-                    "query", query,
-                    "owner_user_id", ownerUserId,
-                    "top_k", topK,
-                    "history", history);
+            Map<String, Object> body =
+                    new java.util.HashMap<>();
+
+            body.put("query", query);
+            body.put("owner_user_id", ownerUserId);
+            body.put("top_k", topK);
+            body.put(
+                    "history",
+                    history == null ? List.of() : history);
+            body.put(
+                    "document_ids",
+                    documentIds == null ? List.of() : documentIds);
+            body.put(
+                    "use_web_search",
+                    useWebSearch);
+            body.put(
+                    "routing_user_context",
+                    routingUserContext == null
+                            ? Map.of()
+                            : routingUserContext);
 
             Map result = client.post()
                     .uri("/api/ai/retrieval-execute")
@@ -231,13 +326,46 @@ public class AiServiceClient {
     public Map<String, Object> retrievalExecute(
             String query,
             Long ownerUserId,
+            int topK,
+            List<Map<String, String>> history,
+            List<Long> documentIds) {
+
+        return retrievalExecute(
+                query,
+                ownerUserId,
+                topK,
+                history,
+                documentIds,
+                false);
+    }
+
+    public Map<String, Object> retrievalExecute(
+            String query,
+            Long ownerUserId,
+            int topK,
+            List<Map<String, String>> history) {
+
+        return retrievalExecute(
+                query,
+                ownerUserId,
+                topK,
+                history,
+                List.of(),
+                false);
+    }
+
+    public Map<String, Object> retrievalExecute(
+            String query,
+            Long ownerUserId,
             int topK) {
 
         return retrievalExecute(
                 query,
                 ownerUserId,
                 topK,
-                List.of());
+                List.of(),
+                List.of(),
+                false);
     }
 
     public Map generate(
@@ -267,6 +395,18 @@ public class AiServiceClient {
 
             log("ai-service", "/api/ai/generate", start, "success");
             return result;
+        } catch (HttpServerErrorException e) {
+            log("ai-service", "/api/ai/generate", start, "error");
+            // 2026-08-25: ai-service가 HCX 모델 락을 제한시간 안에 못 얻으면
+            // (동시 요청 겹침) 이제 몇 분씩 기다리게 두지 않고 503으로 빠르게
+            // 알려줌 — 그걸 여기서 명확한 메시지로 다시 감싸서 위로 던짐.
+            if (e.getStatusCode().value() == 503) {
+                throw new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "AI가 지금 다른 요청을 처리하고 있습니다. 잠시 후 다시 시도해주세요.",
+                        e);
+            }
+            throw e;
         } catch (Exception e) {
             log("ai-service", "/api/ai/generate", start, "error");
             throw e;
@@ -308,24 +448,215 @@ public class AiServiceClient {
                 Map.of());
     }
 
-    public Map validate(String original, String generated) {
+    public ResponseEntity<byte[]> generateDocument(
+            String title,
+            String content,
+            String format,
+            byte[] templateBytes,
+            String templateFilename) {
+
+        if (templateBytes == null || templateBytes.length == 0) {
+            return generateDocument(
+                    title,
+                    content,
+                    format);
+        }
+
         long start = System.currentTimeMillis();
+
         try {
+            MultiValueMap<String, Object> body =
+                    new LinkedMultiValueMap<>();
+
+            body.add("title", title);
+            body.add("content", content);
+            body.add("format", format);
+
+            ByteArrayResource templateResource =
+                    new ByteArrayResource(templateBytes) {
+                        @Override
+                        public String getFilename() {
+                            if (templateFilename == null
+                                    || templateFilename.isBlank()) {
+                                return "template";
+                            }
+                            return templateFilename;
+                        }
+                    };
+
+            body.add("template", templateResource);
+
+            ResponseEntity<byte[]> response = client.post()
+                    .uri("/api/ai/documents/generate-template")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(body)
+                    .retrieve()
+                    .toEntity(byte[].class);
+
+            log(
+                    "ai-service",
+                    "/api/ai/documents/generate-template",
+                    start,
+                    "success");
+
+            return response;
+
+        } catch (Exception e) {
+            log(
+                    "ai-service",
+                    "/api/ai/documents/generate-template",
+                    start,
+                    "error");
+
+            throw e;
+        }
+    }
+
+
+    public ResponseEntity<byte[]> generateDocument(
+            String title,
+            String content,
+            String format) {
+
+        long start = System.currentTimeMillis();
+
+        try {
+            ResponseEntity<byte[]> response = client.post()
+                    .uri("/api/ai/documents/generate")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of(
+                            "title", title,
+                            "content", content,
+                            "format", format))
+                    .retrieve()
+                    .toEntity(byte[].class);
+
+            log(
+                    "ai-service",
+                    "/api/ai/documents/generate",
+                    start,
+                    "success");
+
+            return response;
+
+        } catch (Exception e) {
+            log(
+                    "ai-service",
+                    "/api/ai/documents/generate",
+                    start,
+                    "error");
+
+            throw e;
+        }
+    }
+
+
+    public ResponseEntity<byte[]> previewDocument(
+            byte[] fileBytes,
+            String filename) {
+
+        long start = System.currentTimeMillis();
+
+        try {
+            MultiValueMap<String, Object> body =
+                    new LinkedMultiValueMap<>();
+
+            ByteArrayResource resource =
+                    new ByteArrayResource(fileBytes) {
+                        @Override
+                        public String getFilename() {
+                            return filename;
+                        }
+                    };
+
+            body.add("file", resource);
+
+            ResponseEntity<byte[]> response = client.post()
+                    .uri("/api/ai/documents/preview")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .body(body)
+                    .retrieve()
+                    .toEntity(byte[].class);
+
+            log(
+                    "ai-service",
+                    "/api/ai/documents/preview",
+                    start,
+                    "success");
+
+            return response;
+
+        } catch (Exception e) {
+            log(
+                    "ai-service",
+                    "/api/ai/documents/preview",
+                    start,
+                    "error");
+            throw e;
+        }
+    }
+
+
+    public Map validate(
+            String original,
+            String generated,
+            List<Map<String, Object>> documents,
+            List<Map<String, Object>> webResults) {
+
+        long start = System.currentTimeMillis();
+
+        try {
+            Map<String, Object> body =
+                    new java.util.HashMap<>();
+
+            body.put("original", original);
+            body.put("generated", generated);
+            body.put(
+                    "documents",
+                    documents == null
+                            ? List.of()
+                            : documents);
+            body.put(
+                    "web_results",
+                    webResults == null
+                            ? List.of()
+                            : webResults);
+
             Map result = client.post()
                     .uri("/api/ai/validate")
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of(
-                            "original", original,
-                            "generated", generated))
+                    .body(body)
                     .retrieve()
                     .body(Map.class);
 
-            log("ai-service", "/api/ai/validate", start, "success");
+            log(
+                    "ai-service",
+                    "/api/ai/validate",
+                    start,
+                    "success");
+
             return result;
+
         } catch (Exception e) {
-            log("ai-service", "/api/ai/validate", start, "error");
+            log(
+                    "ai-service",
+                    "/api/ai/validate",
+                    start,
+                    "error");
+
             throw e;
         }
+    }
+
+    public Map validate(
+            String original,
+            String generated) {
+
+        return validate(
+                original,
+                generated,
+                List.of(),
+                List.of());
     }
 
     public String summarizeTitle(String text) {

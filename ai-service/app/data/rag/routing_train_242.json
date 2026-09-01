@@ -1166,5 +1166,105 @@
   {
     "query": "겹치는 문장을 제거해서 자연스럽게 만들어줘",
     "expected_route": "no_retrieval"
+  },
+  {
+    "query": "오늘 LG 트윈스 경기 결과 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 LG 트윈스 경기 결과 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 잠실 경기 누가 이겼어",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "오늘 야구 경기 스코어 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 축구 경기 결과 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "지금 프로야구 순위 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "오늘 LG 트윈스 승리여부 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 NC 다이노스 승패 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "오늘 손흥민 경기 결과 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 야구 경기에서 어느 팀이 이겼어",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "최근 프로야구 이슈 찾아줘",
+    "expected_route": "web_search"
+  },
+  {
+    "query": "요즘 KBO 관련 뉴스 알려줘",
+    "expected_route": "web_search"
+  },
+  {
+    "query": "최근 축구 이적 소식 검색해줘",
+    "expected_route": "web_search"
+  },
+  {
+    "query": "최신 스포츠 뉴스 정리해줘",
+    "expected_route": "web_search"
+  },
+  {
+    "query": "오늘 잠실 경기장의 날씨를 안내해주고 lg 트윈스의 승리여부를 안내해줘.\n추가로 필요한 정보: 고객님께, 최근 이슈와 관련해, 3문단으로, 친근하게, 간결하게, 전문용어는 빼고, 기존 템플릿 기반으로",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 잠실 경기장의 날씨를 안내해주고 lg 트윈스의 승리여부를 안내해줘.\n추가로 필요한 정보: 고객님께, 최근 이슈와 관련해, 3문단으로, 친근하게, 간결하게, 전문용어는 빼고, 기존 템플릿 기반으로",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "어제 환율이 얼마였는지 알려줘.\n추가로 필요한 정보: 친근하게, 간결하게, 전문용어는 빼고",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "오늘 강남 아파트 시세 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "지금 서울 아파트 매매가 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "현재 전세 시세 얼마야",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "오늘 부동산 정책 발표 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "최근 집값 동향 알려줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "요즘 아파트값 오르고 있는지 찾아줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "최신 청약 경쟁률 뉴스 정리해줘",
+    "expected_route": "external_or_realtime"
+  },
+  {
+    "query": "요즘 뜨는 부동산 정책 알려줘",
+    "expected_route": "external_or_realtime"
   }
 ]
