@@ -450,7 +450,7 @@ export default function ChatThreadPage() {
 
     try {
       const documentIds = attachments.map((a) => a.id);
-      const res = await execute(prompt, chatSessionId, documentIds, matchedProfile?.id, controller.signal);
+      const res = await execute(prompt, chatSessionId, documentIds, matchedProfile?.id);
       const resultText = res?.result?.result ?? JSON.stringify(res);
       const assistantId = generateId();
 
@@ -730,6 +730,9 @@ export default function ChatThreadPage() {
                     </button>
                   )}
                     </div>
+                    <div className="msg-bubble user">{m.content}</div>
+                  </div>
+                </div>
                     <div className="msg-bubble user">{m.content}</div>
                   </div>
                 </div>
