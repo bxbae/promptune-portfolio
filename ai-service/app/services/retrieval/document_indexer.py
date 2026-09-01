@@ -185,7 +185,7 @@ def verify_document_owner(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 """,
                 (document_id,),
             )
@@ -212,8 +212,8 @@ def load_document_metadata(
                 """
                 SELECT title, document_type, description
                 FROM documents
-                WHERE id = %s
-                  AND owner_user_id = %s
+                WHERE id = :1
+                  AND owner_user_id = :2
                 """,
                 (document_id, owner_user_id),
             )
@@ -273,7 +273,7 @@ def save_chunk_texts(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 FOR UPDATE
                 """,
                 (document_id,),
@@ -291,7 +291,7 @@ def save_chunk_texts(
                 )
 
             cur.execute(
-                "DELETE FROM document_chunks WHERE document_id = %s",
+                "DELETE FROM document_chunks WHERE document_id = :1",
                 (document_id,),
             )
 
@@ -300,7 +300,7 @@ def save_chunk_texts(
                 INSERT INTO document_chunks (
                     document_id, chunk_index, content, embedding
                 )
-                VALUES (%s, %s, %s, NULL)
+                VALUES (:1, :2, :3, NULL)
                 """,
                 [
                     (document_id, chunk_index, content)
@@ -323,7 +323,7 @@ def save_chunk_embeddings(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 FOR UPDATE
                 """,
                 (document_id,),
@@ -340,12 +340,14 @@ def save_chunk_embeddings(
                     "문서 소유자가 일치하지 않습니다."
                 )
 
+            # PostgreSQL의 %s::vector 캐스트 → Oracle은 TO_VECTOR(:1)로 문자열을
+            # VECTOR 타입으로 변환한다.
             cur.executemany(
                 """
                 UPDATE document_chunks
-                SET embedding = %s::vector
-                WHERE document_id = %s
-                  AND chunk_index = %s
+                SET embedding = TO_VECTOR(:1)
+                WHERE document_id = :2
+                  AND chunk_index = :3
                 """,
                 [
                     (

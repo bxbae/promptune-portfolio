@@ -1,14 +1,14 @@
 -- Microsoft Graph 외부 업무 계정 연결
--- PostgreSQL 기준
+-- Oracle 기준으로 변환 (TIMESTAMPTZ → TIMESTAMP WITH TIME ZONE)
 
 CREATE TABLE microsoft_connections (
-    user_id BIGINT PRIMARY KEY,
-    microsoft_user_id VARCHAR(255),
-    microsoft_email VARCHAR(255),
-    display_name VARCHAR(255),
-    token_cache_encrypted TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_id NUMBER(19) PRIMARY KEY,
+    microsoft_user_id VARCHAR2(255),
+    microsoft_email VARCHAR2(255),
+    display_name VARCHAR2(255),
+    token_cache_encrypted CLOB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
 
     CONSTRAINT fk_microsoft_connections_user
         FOREIGN KEY (user_id)
@@ -17,10 +17,10 @@ CREATE TABLE microsoft_connections (
 );
 
 CREATE TABLE microsoft_oauth_states (
-    state VARCHAR(36) PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMPTZ NOT NULL,
+    state VARCHAR2(36) PRIMARY KEY,
+    user_id NUMBER(19) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 
     CONSTRAINT fk_microsoft_oauth_states_user
         FOREIGN KEY (user_id)

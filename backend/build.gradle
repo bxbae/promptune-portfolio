@@ -11,14 +11,19 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.flywaydb:flyway-core'
-    implementation 'org.flywaydb:flyway-database-postgresql'
+    // Oracle Cloud Free(Always Free Autonomous Database)로 옮기면서 PostgreSQL 대신 Oracle용
+    // Flyway 모듈로 교체. flyway-database-oracle은 Community(무료) 에디션에도 포함되어 있고,
+    // 여기서 쓰는 순수 SQL 마이그레이션에는 Teams 전용 기능(SQL*Plus 커맨드 등)이 필요 없다.
+    implementation 'org.flywaydb:flyway-database-oracle'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
     implementation 'com.microsoft.azure:msal4j:1.25.1'
     implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
     runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
-    runtimeOnly 'org.postgresql:postgresql'
+    // Oracle Autonomous Database(23ai)용 JDBC Thin 드라이버. Maven Central에 무료로 배포되며
+    // 지갑(wallet) 없이도 TLS 전용 접속(jdbc:oracle:thin:@(description=...)) 방식을 지원한다.
+    runtimeOnly 'com.oracle.database.jdbc:ojdbc11'
 
     // S3 문서 파일 업로드/삭제용 (자격증명은 EC2 IAM 역할에서 자동으로 가져옴)
     implementation platform('software.amazon.awssdk:bom:2.28.11')

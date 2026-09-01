@@ -16,7 +16,7 @@ public class DocumentChunk {
     @Column(name = "chunk_index")
     private Integer chunkIndex;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "CLOB")
     private String content;
 
     protected DocumentChunk() {}

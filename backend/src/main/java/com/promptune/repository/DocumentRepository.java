@@ -41,12 +41,17 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     List<Document> findByPromptSessionId(
             @Param("promptSessionId") Long promptSessionId);
 
+    // Oracle Cloud Free 마이그레이션: ON CONFLICT (...) DO NOTHING은 PostgreSQL 전용 문법이라
+    // Oracle에서 동일하게 "이미 있으면 건너뛰기"를 하는 MERGE로 옮김.
     @Modifying
     @Transactional
     @Query(value = """
-            INSERT INTO prompt_session_documents(prompt_session_id, document_id)
-            VALUES (:promptSessionId, :documentId)
-            ON CONFLICT (prompt_session_id, document_id) DO NOTHING
+            MERGE INTO prompt_session_documents tgt
+            USING (SELECT :promptSessionId AS prompt_session_id, :documentId AS document_id FROM dual) src
+            ON (tgt.prompt_session_id = src.prompt_session_id AND tgt.document_id = src.document_id)
+            WHEN NOT MATCHED THEN
+                INSERT (prompt_session_id, document_id)
+                VALUES (src.prompt_session_id, src.document_id)
             """, nativeQuery = true)
     void linkPromptSessionDocument(
             @Param("promptSessionId") Long promptSessionId,
