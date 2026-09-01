@@ -1,5 +1,6 @@
 package com.promptune.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
@@ -29,10 +30,16 @@ public class PipelineDtos {
         }
 
         // 7번 ai-service /suggest 응답
+        public record SuggestionAnchor(
+                        @JsonAlias("sentence_index") int sentenceIndex,
+                        @JsonAlias("char_offset") int charOffset) {
+        }
+
         public record SuggestionItem(
                         String element,
                         String primary,
-                        List<String> alternatives) {
+                        List<String> alternatives,
+                        SuggestionAnchor anchor) {
         }
 
         public record SuggestResult(
@@ -99,6 +106,16 @@ public class PipelineDtos {
                         DiagnoseResult diagnose,
                         PromptRuleResult promptRule,
                         String improvedPrompt,
-                        boolean usedFallback) {
+                        boolean usedFallback,
+                        List<PlaceholderSuggestion> placeholders) {
+        }
+
+        // improvedPrompt 안에 실제로 남아있는 placeholder마다, 그 자리를 채울 실제 후보 문구.
+        // placeholderText는 improvedPrompt 안에서 이 문구를 찾아 밑줄 긋는 용도(프론트에서 문자열 검색).
+        public record PlaceholderSuggestion(
+                        String element,
+                        String placeholderText,
+                        String primary,
+                        List<String> alternatives) {
         }
 }

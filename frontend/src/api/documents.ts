@@ -42,6 +42,9 @@ export interface DocumentItem {
   documentType: DocType; // 항상 한글로 노출 (원본 응답은 영문 enum, 여기서 변환)
   s3Key: string | null;
   fileType: string | null;
+  indexStatus?: "UPLOADED" | "INDEXING" | "TEXT_READY" | "READY" | "FAILED";
+  indexError?: string | null;
+  indexedAt?: string | null;
 }
 
 // 백엔드가 실제로 내려주는 원본 형태 (documentType이 영문 enum)
@@ -95,8 +98,20 @@ export async function listDocuments(): Promise<DocumentItem[]> {
   return raw.map(fromRaw);
 }
 
+// 원본 파일 조회
+export async function fetchDocumentContent(id: number): Promise<Blob> {
+  const res = await fetch(`${API}/api/documents/${id}/content`, {
+    headers: authHeaders(),
+  });
+
+  if (!res.ok) {
+    throw new Error(`파일 열기 실패: ${res.status}`);
+  }
+
+  return res.blob();
+}
+
 // Update - PATCH /api/documents/{id} - title, description, documentType 수정 가능
-// TODO : 파일 자체 Update (덮어쓰기) 기능 추가 필요
 export async function updateDocument(
   id: number,
   patch: { title?: string; description?: string; documentType?: DocType }
@@ -119,6 +134,21 @@ export async function updateDocument(
   return fromRaw(raw);
 }
 
+export async function reindexDocument(id: number): Promise<DocumentItem> {
+  const res = await fetch(`${API}/api/documents/${id}/reindex`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || body?.message || `재인덱싱 실패: ${res.status}`);
+  }
+
+  const raw: RawDocumentItem = await res.json();
+  return fromRaw(raw);
+}
+
 // Delete - DELETE /api/documents/{id}
 export async function deleteDocument(id: number): Promise<void> {
   const res = await fetch(`${API}/api/documents/${id}`, {
@@ -126,4 +156,35 @@ export async function deleteDocument(id: number): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`삭제 실패: ${res.status}`);
+}
+export type DocumentFormat = "docx" | "pdf";
+
+export async function generateDocumentFile(
+  title: string,
+  content: string,
+  format: DocumentFormat,
+  templateDocumentId?: number,
+): Promise<Blob> {
+  const res = await fetch(`${API}/api/documents/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+    body: JSON.stringify({
+      title,
+      content,
+      format,
+      templateDocumentId: templateDocumentId ?? null,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(
+      body?.error || `문서 생성 실패: ${res.status}`
+    );
+  }
+
+  return res.blob();
 }

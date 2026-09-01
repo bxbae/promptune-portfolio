@@ -36,6 +36,18 @@ jobs:
             docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build || deploy_ok=false
 
             if [ "$deploy_ok" = "true" ]; then
+              # 2026-08-25: backend/frontend가 재생성되면 새 컨테이너가 새 IP를 받는데,
+              # nginx는 이미지가 안 바뀌면 up -d --build로도 재시작이 안 돼서 계속 떠있던
+              # 채로 남고, 업스트림 IP를 시작 시점에 한 번만 resolve해서 캐싱해둔 채라
+              # 계속 예전(죽은) 컨테이너로 연결을 시도함 — 그 결과 502가 나서 바로 아래
+              # 헬스체크가 실패로 오판하고, 정상적으로 배포된 빌드인데도 롤백되는 사고가
+              # 날 수 있음 (2026-08-25, 수동 재배포 때 실제로 재현되어 원인 확인됨).
+              # backend/frontend 재기동 직후 nginx를 명시적으로 재시작해서 업스트림 IP를
+              # 새로 잡게 한다.
+              docker compose -f docker-compose.prod.yml --env-file .env.production restart nginx || deploy_ok=false
+            fi
+
+            if [ "$deploy_ok" = "true" ]; then
               echo "빌드/재시작 성공, 헬스체크 시작"
               healthy=false
               # ai-service/backend/frontend를 한 번에 재기동하면 (특히 Spring Boot
@@ -64,10 +76,19 @@ jobs:
               echo "배포 실패 감지 — 이전 커밋($PREV_COMMIT)으로 롤백합니다"
               git reset --hard "$PREV_COMMIT"
               docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+              docker compose -f docker-compose.prod.yml --env-file .env.production restart nginx
               docker image prune -f
+              # 2026-08-25: docker image prune -f는 dangling 이미지만 지우고 build
+              # cache(BuildKit)는 안 건드림. 배포마다 조금씩 쌓이다가 결국 루트 디스크가
+              # 100% 꽉 차서 git/시크릿/빌드 단계가 전부 "No space left on device"로
+              # 연쇄 실패하고, 롤백조차 같은 이유로 실패해 .env.production까지 사라지는
+              # 사고가 실제로 있었음 (2026-08-25). 매 배포(성공/실패 모두) 끝에 정리한다.
+              docker builder prune -af
               echo "롤백 완료. 이번 배포는 실패로 처리합니다."
               exit 1
             fi
 
             docker image prune -f
+            # 위 롤백 분기와 동일한 이유로 성공 경로에도 build cache 정리를 추가.
+            docker builder prune -af
             echo "배포 성공"

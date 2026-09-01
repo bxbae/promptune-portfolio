@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CurrentUser, getCurrentUser, logout } from "@/lib/auth";
 import MicrosoftProfileView from "./components/MicrosoftProfileView";
 import MicrosoftMembersView from "./components/MicrosoftMembersView";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import {
   microsoftConnect,
   microsoftDisconnect,
@@ -29,6 +30,10 @@ export default function SettingsPage() {
   const [msCallback, setMsCallback] = useState<string | null>(null);
   const [msResult, setMsResult] = useState<unknown>(null);
   const [msError, setMsError] = useState("");
+
+  // 로그아웃/MS 연결 해제 확인 모달 - 누른 버튼 기억
+  const [pendingConfirm, setPendingConfirm] = useState<"msDisconnect" | "logout" | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
 
   useEffect(() => {
     setUser(getCurrentUser());
@@ -58,14 +63,22 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleMsDisconnect() {
-    if (!confirm("Microsoft 계정 연결을 해제할까요?")) return;
+  // 연결 해제 - 모달 띄움
+  function handleMsDisconnect() {
+    setPendingConfirm("msDisconnect");
+  }
+
+  async function doMsDisconnect() {
+    setConfirmBusy(true);
     try {
       await microsoftDisconnect();
       setMsResult(null);
       await loadMsStatus();
     } catch {
       setMsError("Microsoft 연결 해제에 실패했습니다.");
+    } finally {
+      setConfirmBusy(false);
+      setPendingConfirm(null);
     }
   }
 
@@ -79,10 +92,26 @@ export default function SettingsPage() {
   }
 
   function handleLogout() {
-    if (!confirm("로그아웃할까요?")) return;
+    setPendingConfirm("logout");
+  }
+
+  function doLogout() {
     logout();
     window.location.href = "/";
   }
+
+  async function handleConfirm() {
+    if (pendingConfirm === "msDisconnect") {
+      await doMsDisconnect();
+    } else if (pendingConfirm === "logout") {
+      doLogout(); // 페이지 이동, 모달 닫기 불필요
+    }
+  }
+
+  const CONFIRM_TEXT: Record<"msDisconnect" | "logout", { title: string; message: string }> = {
+    msDisconnect: { title: "Microsoft 연결 해제", message: "Microsoft 계정 연결을 해제할까요?" },
+    logout: { title: "로그아웃", message: "로그아웃할까요?" },
+  };
 
   return (
     <div>
@@ -156,6 +185,17 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingConfirm !== null}
+        title={pendingConfirm ? CONFIRM_TEXT[pendingConfirm].title : ""}
+        message={pendingConfirm ? CONFIRM_TEXT[pendingConfirm].message : ""}
+        confirmLabel={pendingConfirm === "logout" ? "로그아웃" : "해제"}
+        danger={pendingConfirm === "msDisconnect"}
+        loading={confirmBusy}
+        onConfirm={handleConfirm}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   );
 }

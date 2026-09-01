@@ -1,0 +1,25 @@
+services:
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile.gpu
+
+    environment:
+      USE_REAL_RETRIEVAL: "true"
+      USE_REAL_GENERATION: "true"
+
+      HF_HCX_MODEL: "naver-hyperclovax/HyperCLOVAX-SEED-Vision-Instruct-3B"
+      HF_HCX_DEVICE: "cuda"
+      HF_HCX_DTYPE: "float16"
+
+      BGE_M3_DEVICE: "cuda"
+      BGE_M3_USE_FP16: "true"
+      BGE_M3_BATCH_SIZE: "${BGE_M3_BATCH_SIZE:-16}"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

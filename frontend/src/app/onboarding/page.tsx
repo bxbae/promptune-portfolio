@@ -2,34 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { upsertPreference } from "@/api/userPreferences";
-
-type QKey = "speed" | "detail" | "preserve";
-const QUESTIONS: { key: QKey; title: string; options: { value: string; label: string; desc: string }[] }[] = [
-  {
-    key: "speed",
-    title: "1. 속도 vs 정확도",
-    options: [
-      { value: "fast", label: "빠르게", desc: "짧게 다듬고 바로 다음 작업으로" },
-      { value: "accurate", label: "정확하게", desc: "시간이 걸려도 꼼꼼하게 검토" },
-    ],
-  },
-  {
-    key: "detail",
-    title: "2. 설명 분량",
-    options: [
-      { value: "brief", label: "간결하게", desc: "핵심만 짧게, 바로 적용" },
-      { value: "detailed", label: "자세하게", desc: "추천 근거까지 알고 싶어요" },
-    ],
-  },
-  {
-    key: "preserve",
-    title: "3. 원문 존중도",
-    options: [
-      { value: "keep", label: "최대한 유지", desc: "빠진 조건만 채우고 말투는 그대로" },
-      { value: "improve", label: "적극적으로 보완", desc: "더 매끄러운 쪽으로 바꿔도 OK" }, 
-    ],
-  },
-];
+import { PREF_QUESTIONS, type QKey } from "@/lib/preferenceQuestions";
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -62,7 +35,7 @@ export default function OnboardingPage() {
       </p>
 
       {/* 질문-선택지 */}
-      {QUESTIONS.map((q) => (
+      {PREF_QUESTIONS.map((q) => (
         <div key={q.key} style={{ marginTop: 24 }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>
             {q.title}

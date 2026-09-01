@@ -2,13 +2,37 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
 numpy
-transformers==5.14.1
-FlagEmbedding==1.4.0
-psycopg[binary]
+transformers==4.52.4
+FlagEmbedding==1.3.5
+
+einops
+timm
+av
+# 2026-08-29: 원본 dmlc/decord는 PyPI에 Linux(manylinux)/Windows 휠만 올라오고
+# macOS용 휠(Intel/Apple Silicon 둘 다)이 아예 없어서, Apple Silicon(M1~M3) 맥에서
+# `docker compose build ai-service`를 직접 돌리면 "ERROR: Could not find a version
+# that satisfies the requirement decord (from versions: none)"로 실패한다 - 소스
+# 빌드도 사실상 안 되는 상태(CMake로 별도 ffmpeg 빌드 필요)라 맥에서는 못 돌리는
+# 게 사실상 기본값이었음. eva-decord(Georgia Tech DB 팀이 유지보수하는 decord
+# 포크, https://pypi.org/project/eva-decord/)는 macOS Intel/ARM64(cp38~cp311)
+# 휠까지 포함해서 배포하고, 설치되는 모듈 이름도 그대로 decord라 코드 수정 없이
+# 드롭인 교체가 된다(app 코드에서 decord를 직접 import하는 곳도 없음 - transformers가
+# HCX Vision-Instruct-3B의 비디오 전처리 경로에서 내부적으로 필요로 하는 전이
+# 의존성). ai-service Dockerfile이 python:3.11-slim(= cp311)을 쓰므로 eva-decord의
+# 휠 커버리지(cp38~cp311)와도 맞는다. 맥에서 venv로 직접 돌릴 때도 Python 3.11
+# 이하를 써야 휠이 잡힌다(eva-decord가 아직 cp312/3.13 휠은 안 냄).
+eva-decord
+
+# Oracle Cloud Free(Always Free Autonomous Database)로 이전하면서 psycopg 대신
+# python-oracledb로 교체. "thin mode"라 Oracle Instant Client 같은 별도 네이티브
+# 설치가 필요 없어 Render 같은 PaaS에도 그대로 배포된다.
+oracledb
 
 tavily-python
 pypdf
 python-docx
+python-pptx
 python-multipart
 PyMuPDF
 scikit-learn==1.7.2
+openpyxl==3.1.5

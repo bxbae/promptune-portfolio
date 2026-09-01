@@ -6,6 +6,7 @@ import {
   deleteReceiverProfile,
   ReceiverProfile,
 } from "@/api/receiverProfiles";
+import ConfirmDialog from "@/components/ConfirmDialog";
 
 export default function StylesPage() {
   const [profiles, setProfiles] = useState<ReceiverProfile[]>([]);
@@ -15,6 +16,9 @@ export default function StylesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editRelationship, setEditRelationship] = useState("");
   const [editTone, setEditTone] = useState("");
+
+  const [deleteTarget, setDeleteTarget] = useState<ReceiverProfile | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   function refresh() {
     setLoading(true);
@@ -45,14 +49,22 @@ export default function StylesPage() {
     }
   }
 
-  // TODO: 실제 구현 시 확인 모달 필요 (스토리보드 17p 안내 문구) - 우선 confirm()으로 대체
-  async function handleDelete(p: ReceiverProfile) {
-    if (!confirm(`"${p.receiverName}" 수신자의 학습된 스타일을 초기화할까요?`)) return;
+  // 삭제 - 모달 띄움
+  function handleDelete(p: ReceiverProfile) {
+    setDeleteTarget(p);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await deleteReceiverProfile(p.id);
-      setProfiles((prev) => prev.filter((x) => x.id !== p.id));
+      await deleteReceiverProfile(deleteTarget.id);
+      setProfiles((prev) => prev.filter((x) => x.id !== deleteTarget.id));
+      setDeleteTarget(null);
     } catch (e: any) {
       alert(e.message || "삭제에 실패했습니다.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -133,6 +145,17 @@ export default function StylesPage() {
           </div>
         ))}
       </div>
+      
+    <ConfirmDialog
+        open={deleteTarget !== null}
+        title="수신자 스타일 초기화"
+        message={`"${deleteTarget?.receiverName}" 수신자의 학습된 스타일을 초기화할까요?`}
+        confirmLabel="초기화"
+        danger
+        loading={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

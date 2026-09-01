@@ -1,6 +1,7 @@
 package com.promptune.domain;
 
 import jakarta.persistence.*;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "documents")
@@ -21,7 +22,7 @@ public class Document {
     @Column(name = "file_type")
     private String fileType;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "CLOB")
     private String description;
 
     @Column(name = "document_type")
@@ -29,6 +30,15 @@ public class Document {
 
     @Column(name = "prompt_session_id")
     private Long promptSessionId;  // 이 문서가 첨부된 채팅 메시지. 파일관리 탭 업로드는 null.
+
+    @Column(name = "index_status", nullable = false)
+    private String indexStatus = "UPLOADED";
+
+    @Column(name = "index_error", columnDefinition = "CLOB")
+    private String indexError;
+
+    @Column(name = "indexed_at")
+    private LocalDateTime indexedAt;
 
     protected Document() {}
 
@@ -52,4 +62,10 @@ public class Document {
     public void setDocumentType(String documentType) { this.documentType = documentType; }
     public Long getPromptSessionId() { return promptSessionId; }
     public void setPromptSessionId(Long promptSessionId) { this.promptSessionId = promptSessionId; }
+    public String getIndexStatus() { return indexStatus; }
+    public void setIndexStatus(String indexStatus) { this.indexStatus = indexStatus; }
+    public String getIndexError() { return indexError; }
+    public void setIndexError(String indexError) { this.indexError = indexError; }
+    public LocalDateTime getIndexedAt() { return indexedAt; }
+    public void setIndexedAt(LocalDateTime indexedAt) { this.indexedAt = indexedAt; }
 }

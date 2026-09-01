@@ -12,6 +12,6 @@
   "sep_token": "[SEP]",
   "strip_accents": null,
   "tokenize_chinese_chars": true,
-  "tokenizer_class": "TokenizersBackend",
+  "tokenizer_class": "PreTrainedTokenizerFast",
   "unk_token": "[UNK]"
 }

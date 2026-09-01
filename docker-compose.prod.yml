@@ -4,7 +4,25 @@
 
 services:
   ai-service:
-    build: ./ai-service
+    # 2026-08-25: 프로덕션이 t3.large에서 g4dn.xlarge(GPU) 인스턴스로 옮겨감에 따라
+    # ai-service도 GPU를 실제로 쓰도록 전환. 이전엔 dockerfile 지정이 없어서 CPU 전용
+    # Dockerfile로 빌드됐고, GPU 인스턴스 위에서 떠도 컨테이너에 GPU가 전혀 전달되지
+    # 않아(디바이스 예약 설정 자체가 없었음) 실질적으로 CPU로 추론하고 있었다 —
+    # /usr/local의 CUDA 툴킷(수십 GB)만 낭비되고 정작 서비스는 GPU를 못 쓰던 상태.
+    # docker-compose.gpu.yml(GPU 단독 벤치마크용)에서 검증된 설정을 반영한다.
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile.gpu
+    # docker compose(스웜 아님)에서도 Compose v2.3+ / NVIDIA Container Toolkit이
+    # 설치돼 있으면 이 reservations 블록으로 GPU를 컨테이너에 붙일 수 있다
+    # (g4dn.xlarge에서 nvidia-ctk 설정 후 실측 확인됨 — docker-compose.gpu.yml과 동일).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       USE_REAL_MODELS: "${USE_REAL_MODELS:-false}"
       USE_REAL_DIAGNOSIS: "${USE_REAL_DIAGNOSIS:-false}"
@@ -14,16 +32,39 @@ services:
       USE_REAL_SPELLCHECK: "${USE_REAL_SPELLCHECK:-false}"
       BAREUN_API_KEY: "${BAREUN_API_KEY:-}"
       USE_REAL_SUGGESTION: "${USE_REAL_SUGGESTION:-false}"
+      # 2026-08-25: retrieval-execute의 웹검색(external_or_realtime) 라우트에서 사용.
+      # 이 줄이 없으면 .env.production에 TAVILY_API_KEY를 채워도 컨테이너 안으로
+      # 전달되지 않아서(docker compose는 environment에 명시된 변수만 주입함)
+      # [Retrieval] execute failed: TAVILY_API_KEY가 없습니다 가 계속 재현됨.
+      TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
       # 2026-08-24: 승득님이 올린 real HyperCLOVA X 생성(generate_hcx.py)을 켜기 위해 추가.
       # USE_REAL_GENERATION이 컨테이너 환경에 아예 없으면 코드가 USE_REAL_MODELS로 폴백하는데,
       # USE_REAL_MODELS를 통째로 true로 켜면 진단(KcELECTRA)/추천(suggest_hcx, 내부적으로
       # BGE-M3까지 무조건 로드함)까지 같이 켜져 버려서 위험함 — 생성만 별도로 켤 수 있게
       # 명시적으로 선언.
       USE_REAL_GENERATION: "${USE_REAL_GENERATION:-false}"
+      # 내부 문서/첨부파일은 mock으로 폴백하면 잘못된 답을 만들 수 있으므로
+      # 배포 환경에서는 기본적으로 실제 BGE-M3 + pgvector retrieval을 사용한다.
+      USE_REAL_RETRIEVAL: "${USE_REAL_RETRIEVAL:-true}"
+      USE_REAL_VALIDATION: "${USE_REAL_VALIDATION:-false}"
       HF_TOKEN: "${HF_TOKEN:-}"
-      HF_HCX_MODEL: "${HF_HCX_MODEL:-naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B}"
+      HF_HCX_MODEL: "${HF_HCX_MODEL:-naver-hyperclovax/HyperCLOVAX-SEED-Vision-Instruct-3B}"
+      # 기본값은 CPU로 유지하고, GPU 배포에서는 .env.production의
+      # HF_HCX_DEVICE=cuda로 명시적으로 활성화한다.
       HF_HCX_DEVICE: "${HF_HCX_DEVICE:-cpu}"
+      HF_HCX_DTYPE: "${HF_HCX_DTYPE:-auto}"
       HF_HOME: /root/.cache/huggingface
+      BGE_M3_MODEL: "${BGE_M3_MODEL:-BAAI/bge-m3}"
+      BGE_M3_DEVICE: "${BGE_M3_DEVICE:-auto}"
+      BGE_M3_USE_FP16: "${BGE_M3_USE_FP16:-auto}"
+      BGE_M3_BATCH_SIZE: "${BGE_M3_BATCH_SIZE:-4}"
+      # AI-service가 pgvector/RDS를 직접 조회하므로 Spring의 JDBC URL과 별개로
+      # psycopg용 DB_* 환경변수도 컨테이너에 반드시 전달해야 한다.
+      DB_HOST: "${DB_HOST}"
+      DB_PORT: "${DB_PORT:-5432}"
+      DB_NAME: "${DB_NAME}"
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: "${DB_PASSWORD}"
     volumes:
       - ./ai-service/models/prompt-diagnosis:/app/models/prompt-diagnosis:ro
       - hf_cache:/root/.cache/huggingface

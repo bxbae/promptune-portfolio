@@ -29,6 +29,11 @@ SECRET_KEYS=(
   MICROSOFT_CLIENT_SECRET
   MICROSOFT_TOKEN_KEY
   HF_TOKEN
+  # 2026-08-25: 웹검색(retrieval-execute의 external_or_realtime 라우트)에 필요.
+  # 이게 없으면 ai-service가 [Retrieval] execute failed: TAVILY_API_KEY가 없습니다
+  # 로 실패하고(backend는 fail-open으로 흡수하지만 웹검색 없이 진행됨), 특히
+  # "오늘 환율"/"실시간 주가" 같은 요청은 실제 데이터를 못 가져와 답변 품질이 떨어짐.
+  TAVILY_API_KEY
 )
 
 if ! command -v aws >/dev/null 2>&1; then

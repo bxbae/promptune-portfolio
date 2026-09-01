@@ -2,23 +2,35 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { execute } from "@/lib/api";
-import { getChatMessages } from "@/api/chatSessions";
+import { getChatMessages, ChatMessage, MessageAttachment } from "@/api/chatSessions";
 import { listReceiverProfiles, upsertReceiverProfile, ReceiverProfile } from "@/api/receiverProfiles";
 import { microsoftMembers } from "@/lib/microsoft";
 import { suggestToneFromJobTitle } from "@/lib/toneMapping";
 import { grantConsent, getConsentStatus } from "@/api/consents";
 import { submitPromptSessionEdit } from "@/api/promptSessions";
 import PromptEditor, { DirectEdit } from "@/components/PromptEditor";
-import type { DocumentItem } from "@/api/documents";
+import { generateDocumentFile, type DocumentFormat, type DocumentItem } from "@/api/documents";
+
+interface MessageSource {
+  title: string;
+  url: string;
+}
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   promptSessionId?: number;
-  // TODO: 백엔드 /messages 응답에 첨부문서가 포함되면
-  // 지난 대화를 다시 열었을 때도 여기 채워지도록 history 로딩부에 매핑 추가
-  attachments?: DocumentItem[];
+  // /api/execute 응답의 sources(웹검색으로 실제 참고한 기사 title/url) -
+  // 2026-08-26: 크롬 확장 프로그램의 "출처 더보기"와 동일한 데이터를
+  // 웹 채팅에도 보여주기 위해 추가. 지난 대화를 다시 불러올 때는 채워지지
+  // 않음(백엔드가 prompt_session에 sources를 저장하지 않아서 - 방금 생성된
+  // 응답에만 있음).
+  sources?: MessageSource[];
+  // 방금 보낸 메시지는 DocumentItem[](업로드 응답), 지난 대화 다시 불러온 메시지는
+  // MessageAttachment[](백엔드 /messages 응답)이 들어옴. 렌더링엔 id/title만 쓰여서
+  // DocumentItem이 구조적으로 MessageAttachment를 만족하므로 타입 호환됨.
+  attachments?: MessageAttachment[];
   // 실패한 응답에만 채워짐. "재전송" 버튼이 이 payload로 runAssistant를 다시 호출.
   failed?: boolean;
   retryPayload?: {
@@ -26,6 +38,9 @@ interface Message {
     directEdits: DirectEdit[];
     attachments: DocumentItem[];
   };
+  // 사용자 메시지에만 채워짐. 인용해서 보낸 경우 인용된 원본 메시지를 함께 들고 있어서,
+  // 전송 직후에도(새로고침 없이) 이 메시지 위에 작은 인용 말풍선을 바로 그릴 수 있다.
+  quotedMessage?: { role: "user" | "assistant"; content: string };
 }
 
 // TODO: 정식 파이프라인 붙으면 수정
@@ -33,8 +48,13 @@ interface Message {
 // 실제 개체명 인식X >> **님, **씨 패턴만 잡아내는 정규식
 // 정식 8요소 분석 파이프라인이 붙기 전까지의 임시 로직
 function detectReceiverName(prompt: string): string | null {
-  const match = prompt.match(/([가-힣]{2,4})(님|씨)/);
-  return match ? match[1] : null;
+  const titleMatch = prompt.match(
+    /([가-힣]{1,4}(?:사원|대리|과장|차장|팀장|부장|이사|상무|전무))(?:님|씨)?(?=께|에게|한테|\s|$)/,
+  );
+  if (titleMatch) return titleMatch[1];
+
+  const honorificMatch = prompt.match(/([가-힣]{2,4})(?:님|씨)/);
+  return honorificMatch ? honorificMatch[1] : null;
 }
 
 // TODO: 목업 - 나중에 백엔드/ai-service 실제 스타일 분석 붙으면 이 배열 자체를 없애고
@@ -44,6 +64,88 @@ const MOCK_STYLE_HINTS = [
   "요청사항을 첫 문단에 배치",
   "마감일과 회신 요청을 자주 포함",
 ];
+
+// PromptEditor가 인용해서 보낼 때 finalPrompt에 붙이는 wrapper 포맷.
+// 인용 메타데이터(누구 메시지를 인용했는지)를 따로 저장하는 DB 컬럼이 없어서,
+// 지난 대화를 새로고침해서 다시 불러오면 저장된 prompt 안에 이 wrapper가 텍스트
+// 그대로 박혀서 내려온다. 화면엔 wrapper를 그대로 보여주지 않고 인용 부분/실제
+// 타이핑한 부분을 다시 분리해서, 방금 막 보낸 메시지와 똑같은 모양(작은 인용
+// 말풍선 + 본문)으로 렌더링한다.
+const QUOTE_WRAPPER_RE =
+  /^\[인용된 이전 (내 메시지|AI 응답)\]\n([\s\S]*?)\n\n\[위 내용을 참고해서 답변\]\n([\s\S]*)$/;
+
+function splitQuotedPrompt(promptText: string): {
+  content: string;
+  quotedMessage?: { role: "user" | "assistant"; content: string };
+} {
+  const match = promptText.match(QUOTE_WRAPPER_RE);
+  if (!match) return { content: promptText };
+
+  const [, roleLabel, quotedContent, actualPrompt] = match;
+  return {
+    content: actualPrompt,
+    quotedMessage: {
+      role: roleLabel === "내 메시지" ? "user" : "assistant",
+      content: quotedContent,
+    },
+  };
+}
+
+// 지난 대화 기록(getChatMessages)을 화면에 표시할 메시지 배열로 변환.
+// 응답 없이 prompt만 저장된 항목(=응답 생성에 실패했던 시도)이 같은 prompt로
+// 연속해서 여러 개 남아있으면(재전송을 여러 번 실패했을 때 예전엔 시도할 때마다
+// 새 행이 쌓였음) 화면엔 마지막 한 개만 "재시도" 가능한 실패 메시지로 보여준다.
+function buildLoadedMessages(history: ChatMessage[]): Message[] {
+  const loaded: Message[] = [];
+  let i = 0;
+
+  while (i < history.length) {
+    const m = history[i];
+
+    if (m.prompt && !m.aiResponse) {
+      let j = i;
+      while (
+        j + 1 < history.length &&
+        history[j + 1].prompt === m.prompt &&
+        !history[j + 1].aiResponse
+      ) {
+        j++;
+      }
+      const last = history[j];
+      const { content, quotedMessage } = splitQuotedPrompt(last.prompt);
+      loaded.push({
+        id: `hist-${last.id}-user`,
+        role: "user",
+        content,
+        attachments: last.attachments,
+        quotedMessage,
+        failed: true,
+        retryPayload: {
+          // 재시도는 원본 그대로(인용 wrapper 포함) 다시 보내야 AI가 같은 맥락으로 답한다.
+          prompt: last.prompt,
+          directEdits: [],
+          // MessageAttachment는 {id, title}만 있지만 retryMessage → runAssistant는
+          // attachments에서 .id만 꺼내 쓰므로(documentIds 추출) 구조적으로 호환된다.
+          attachments: (last.attachments ?? []) as unknown as DocumentItem[],
+        },
+      });
+      i = j + 1;
+      continue;
+    }
+
+    if (m.prompt) {
+      const { content, quotedMessage } = splitQuotedPrompt(m.prompt);
+      loaded.push({ id: `hist-${m.id}-user`, role: "user", content, attachments: m.attachments, quotedMessage });
+    }
+    if (m.aiResponse) {
+      loaded.push({ id: `hist-${m.id}-assistant`, role: "assistant", content: m.aiResponse, promptSessionId: m.id });
+    }
+    i++;
+  }
+
+  return loaded;
+}
+
 
 export default function ChatThreadPage() {
   const params = useParams<{ id: string }>();
@@ -58,6 +160,9 @@ export default function ChatThreadPage() {
   const [historyError, setHistoryError] = useState("");
   const threadEndRef = useRef<HTMLDivElement>(null);
   const ranRef = useRef(false);
+  // 응답을 기다리는 동안 "중단" 버튼이 누르면 이걸로 fetch를 취소한다.
+  // runAssistant가 새로 시작할 때마다 새 컨트롤러로 갈아끼운다.
+  const abortControllerRef = useRef<AbortController | null>(null);
   // isFresh : URL의 ?run=1 쿼리로 판단
   // 첫 메시지 전송 후 router.replace로 쿼리를 지우면 isFresh=false로 바뀌며 방금 보낸 메시지를 덮어써버리는 문제 발생
   // 페이지 진입시점에 fresh였는지를 1회성 값으로 고정해서 사용 >> isFreshRef
@@ -72,6 +177,9 @@ export default function ChatThreadPage() {
 
   // 저장된 개인화 데이터가 없는 수신자가 감지됐을 때 뜨는 동의 카드 (한 번에 1개)
   const [receiverProfiles, setReceiverProfiles] = useState<ReceiverProfile[]>([]);
+  const [selectedReceiverProfileId, setSelectedReceiverProfileId] = useState<
+    number | null
+  >(null);
   const [pendingConsent, setPendingConsent] = useState<
     { name: string; forMessageId: string; saving: boolean; done: boolean } | null
   >(null);
@@ -79,13 +187,25 @@ export default function ChatThreadPage() {
   useEffect(() => {
     listReceiverProfiles()
       .then(setReceiverProfiles)
-      .catch(() => {}); // 실패해도 채팅 자체는 그대로 진행 (동의 카드만 안 뜸)
+      .catch(() => { }); // 실패해도 채팅 자체는 그대로 진행 (동의 카드만 안 뜸)
   }, []);
 
   // 만족도(👍/👎) - 메시지 id별로 선택 상태 기록 (한 번 누르면 고정, 재선택 불가 - 스토리보드 기준)
   const [satisfaction, setSatisfaction] = useState<Record<string, "good" | "bad">>({});
   // 응답 복사 버튼 - 복사 직후 잠깐 체크 아이콘으로 바뀌었다가 원래대로 돌아옴
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const [documentGenerating, setDocumentGenerating] = useState<
+    Record<string, DocumentFormat | null>
+  >({});
+
+  const [generatedDocuments, setGeneratedDocuments] = useState<
+    Record<string, {
+      fileName: string;
+      format: DocumentFormat;
+      blob: Blob;
+    }>
+  >({});
   // 이전 메시지를 인용해서 다음 프롬프트에 맥락으로 붙여보내기
   const [quotedMessage, setQuotedMessage] = useState<
     { role: "user" | "assistant"; content: string } | null
@@ -119,9 +239,85 @@ export default function ChatThreadPage() {
     }
   }
 
+  async function generateMessageDocument(
+    m: Message,
+    format: DocumentFormat,
+  ) {
+    const firstLine =
+      m.content
+        .split("\n")
+        .map((line) => line.trim())
+        .find(Boolean) ?? "PrompTune 생성 문서";
+
+    const title = firstLine
+      .replace(/^[#*\-\s]+/, "")
+      .slice(0, 40);
+
+    setDocumentGenerating((prev) => ({
+      ...prev,
+      [m.id]: format,
+    }));
+
+    try {
+      const blob = await generateDocumentFile(
+        title,
+        m.content,
+        format,
+      );
+
+      const safeTitle =
+        title.replace(/[\\/:*?"<>|]/g, "_") ||
+        "PrompTune_생성_문서";
+
+      setGeneratedDocuments((prev) => ({
+        ...prev,
+        [m.id]: {
+          fileName: `${safeTitle}.${format}`,
+          format,
+          blob,
+        },
+      }));
+    } catch (e) {
+      alert(
+        e instanceof Error
+          ? e.message
+          : "문서 생성에 실패했습니다."
+      );
+    } finally {
+      setDocumentGenerating((prev) => ({
+        ...prev,
+        [m.id]: null,
+      }));
+    }
+  }
+
+  function downloadGeneratedDocument(m: Message) {
+    const file = generatedDocuments[m.id];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file.blob);
+    const a = document.createElement("a");
+
+    a.href = url;
+    a.download = file.fileName;
+
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
   async function rateSatisfaction(m: Message, value: "good" | "bad") {
-    if (!m.promptSessionId || satisfaction[m.id]) return;
-    setSatisfaction((prev) => ({ ...prev, [m.id]: value })); // 낙관적 업데이트
+    if (satisfaction[m.id]) return;
+
+    setSatisfaction((prev) => ({
+      ...prev,
+      [m.id]: value,
+    }));
+
+    if (!m.promptSessionId) return;
+
     try {
       await submitPromptSessionEdit(m.promptSessionId, { satisfaction: value });
     } catch {
@@ -177,15 +373,16 @@ export default function ChatThreadPage() {
       const stored = sessionStorage.getItem(`chat-first-${chatSessionId}`);
       sessionStorage.removeItem(`chat-first-${chatSessionId}`);
       if (stored) {
-        // /chat/page.tsx가 { text, directEdits, attachments } JSON으로 저장
-        const { text: firstPrompt, directEdits, attachments } = JSON.parse(stored) as {
+        // /chat/page.tsx가 { text, sendText, directEdits, attachments } JSON으로 저장
+        const { text: displayText, sendText, directEdits, attachments } = JSON.parse(stored) as {
           text: string;
+          sendText?: string;
           directEdits: DirectEdit[];
           attachments?: DocumentItem[];
         };
         const userMessageId = generateId();
-        setMessages([{ id: userMessageId, role: "user", content: firstPrompt, attachments }]);
-        runAssistant(firstPrompt, directEdits, attachments ?? [], userMessageId);
+        setMessages([{ id: userMessageId, role: "user", content: displayText.trim(), attachments }]);
+        runAssistant(sendText ?? displayText, directEdits, attachments ?? [], userMessageId);
       }
       router.replace(`/chat/${chatSessionId}`);
     }
@@ -201,13 +398,7 @@ export default function ChatThreadPage() {
     getChatMessages(chatSessionId)
       .then((history) => {
         if (cancelled) return;
-        const loaded: Message[] = history.flatMap((m) => {
-          const pair: Message[] = [];
-          if (m.prompt) pair.push({ id: `hist-${m.id}-user`, role: "user", content: m.prompt });
-          if (m.aiResponse) pair.push({ id: `hist-${m.id}-assistant`, role: "assistant", content: m.aiResponse, promptSessionId: m.id });
-          return pair;
-        });
-        setMessages(loaded);
+        setMessages(buildLoadedMessages(history));
 
         // 이미 만족도를 남긴 메시지는 새로고침해도 버튼이 다시 안 뜨도록 서버 값으로 초기화
         const initialSatisfaction: Record<string, "good" | "bad"> = {};
@@ -246,21 +437,95 @@ export default function ChatThreadPage() {
       ? receiverProfiles.find((p) => p.receiverName === detectedBeforeGen)
       : undefined;
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     // 생성 전에 미리 수신자 감지 - 이미 저장된 프로필과 이름이 일치하면 그 톤을 생성에 반영
-    const detectedBeforeGen = detectReceiverName(prompt);
-    const matchedProfile = detectedBeforeGen
-      ? receiverProfiles.find((p) => p.receiverName === detectedBeforeGen)
-      : undefined;
+    const matchedProfile =
+      selectedReceiverProfileId !== null
+        ? receiverProfiles.find(
+            (profile) => profile.id === selectedReceiverProfileId,
+          )
+        : undefined;
 
     try {
       const documentIds = attachments.map((a) => a.id);
-      const res = await execute(prompt, chatSessionId, documentIds, matchedProfile?.id);
+      const res = await execute(prompt, chatSessionId, documentIds, matchedProfile?.id, controller.signal);
       const resultText = res?.result?.result ?? JSON.stringify(res);
-      setIsGenerating(false);
       const assistantId = generateId();
+
+      const documentAction = res?.documentAction as
+        | {
+          type: "GENERATE_DOCUMENT";
+          title: string;
+          content: string;
+          format: DocumentFormat;
+          useExistingTemplate?: boolean;
+        }
+        | undefined;
+
+      if (documentAction?.type === "GENERATE_DOCUMENT") {
+        try {
+          const blob = await generateDocumentFile(
+            documentAction.title,
+            documentAction.content,
+            documentAction.format,
+          );
+
+          setGeneratedDocuments((prev) => ({
+            ...prev,
+            [assistantId]: {
+              fileName: `${documentAction.title}.${documentAction.format}`,
+              format: documentAction.format,
+              blob,
+            },
+          }));
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantId,
+              role: "assistant",
+              content: resultText,
+              promptSessionId: res?.promptSessionId,
+            },
+          ]);
+        } catch (e) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantId,
+              role: "assistant",
+              content:
+                e instanceof Error
+                  ? `문서 생성에 실패했습니다: ${e.message}`
+                  : "문서 생성에 실패했습니다.",
+              promptSessionId: res?.promptSessionId,
+            },
+          ]);
+        } finally {
+          setIsGenerating(false);
+        }
+
+        window.dispatchEvent(
+          new CustomEvent("chat-session-updated", {
+            detail: { chatSessionId },
+          })
+        );
+
+        return;
+      }
+
+      setIsGenerating(false);
       setMessages((prev) => [
         ...prev,
-        { id: assistantId, role: "assistant", content: resultText, promptSessionId: res?.promptSessionId },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: resultText,
+          promptSessionId: res?.promptSessionId,
+          sources: Array.isArray(res?.sources) ? res.sources : undefined,
+        },
       ]);
 
       // "직접 입력"으로 해결한 요소 = 직접수정. response_edits에 기록.
@@ -300,8 +565,13 @@ export default function ChatThreadPage() {
         })
       );
 
-    } catch {
+    } catch (error) {
       setIsGenerating(false);
+      // "중단" 버튼으로 사용자가 직접 취소한 경우엔 실패 문구 대신
+      // 중단됐다는 걸 알려주는 문구로 다르게 보여준다. 그 외엔 기존과 동일.
+      const wasAborted =
+        error instanceof DOMException && error.name === "AbortError";
+
       setMessages((prev) => [
         ...prev.map((x) =>
           userMessageId && x.id === userMessageId
@@ -311,10 +581,23 @@ export default function ChatThreadPage() {
         {
           id: generateId(),
           role: "assistant",
-          content: "결과를 생성하지 못했습니다. 잠시 후 다시 시도해주세요.",
+          content: wasAborted
+            ? "답변 생성을 중단했어요."
+            : "결과를 생성하지 못했습니다. 잠시 후 다시 시도해주세요.",
         },
       ]);
+    } finally {
+      // 이 요청이 여전히 현재 활성 컨트롤러일 때만 정리한다(경합 방지).
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
     }
+  }
+
+  // 응답을 기다리는 동안 "중단" 버튼을 누르면 진행 중인 fetch를 취소한다.
+  // 취소되면 위 catch(AbortError) 분기가 사용자 메시지에 재시도 버튼을 붙여준다.
+  function stopGenerating() {
+    abortControllerRef.current?.abort();
   }
 
   // 실패했던 프롬프트를 같은 payload로 다시 시도.
@@ -349,15 +632,24 @@ export default function ChatThreadPage() {
     runAssistant(prompt, directEdits, attachments, m.id);
   }
 
-  function handleSubmit(text: string, directEdits: DirectEdit[], attachments: DocumentItem[]) {
+  function handleSubmit(
+    displayText: string,
+    directEdits: DirectEdit[],
+    attachments: DocumentItem[],
+    sendText?: string,
+  ) {
     if (isGenerating) return;
+    // 전송 시점의 인용 스냅샷 - PromptEditor가 onSubmit 이후에 onClearQuote를
+    // 호출해서 quotedMessage state를 지우므로, 지워지기 전에 여기서 미리 떠둬야
+    // 방금 보낸 메시지에 "어떤 걸 인용했는지"가 남는다(새로고침 없이도 바로 보이게).
+    const activeQuote = quotedMessage ?? undefined;
     setPendingConsent(null); // 새 메시지 보내면 이전 턴의 동의 카드는 정리
     const userMessageId = generateId();
     setMessages((prev) => [
       ...prev,
-      { id: userMessageId, role: "user", content: text, attachments },
+      { id: userMessageId, role: "user", content: displayText.trim(), attachments, quotedMessage: activeQuote },
     ]);
-    runAssistant(text, directEdits, attachments, userMessageId);
+    runAssistant(sendText ?? displayText, directEdits, attachments, userMessageId);
   }
 
   const hasThread = messages.length > 0;
@@ -391,6 +683,14 @@ export default function ChatThreadPage() {
             <div className={`msg-row ${m.role}`} key={m.id}>
               {m.role === "user" ? (
                 <div className="msg-user-col">
+                  {m.quotedMessage && (
+                    <div className="msg-quote-preview">
+                      <span className="msg-quote-preview-label">
+                        {m.quotedMessage.role === "user" ? "내 메시지 인용" : "AI 답변 인용"}
+                      </span>
+                      <span className="msg-quote-preview-text">{m.quotedMessage.content}</span>
+                    </div>
+                  )}
                   {m.attachments && m.attachments.length > 0 && (
                     <div className="msg-attach-row">
                       {m.attachments.map((doc) => (
@@ -439,40 +739,83 @@ export default function ChatThreadPage() {
               ) : (
                 <div className="msg-assistant">
                   <div className="msg-sender">PrompTune</div>
-                  <div className="msg-bubble assistant">
-                    {m.content}
-                    <button
-                      type="button"
-                      className="quote-btn"
-                      onClick={() => quoteMessage(m)}
-                      aria-label="이 응답 인용"
-                      title="이 응답을 인용해서 다시 질문하기"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 14 4 9 9 4" />
-                        <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className={`copy-btn ${copiedId === m.id ? "copied" : ""}`}
-                      onClick={() => copyMessage(m)}
-                      aria-label="응답 복사"
-                      title={copiedId === m.id ? "복사됨" : "복사하기"}
-                    >
-                      {copiedId === m.id ? (
+                  <div className="msg-assistant-response">
+                    <div className="msg-assistant-row">
+                      <div className="msg-bubble assistant">
+                        {m.content}
+                        <button
+                          type="button"
+                          className={`copy-btn ${copiedId === m.id ? "copied" : ""}`}
+                          onClick={() => copyMessage(m)}
+                          aria-label="답변 복사"
+                          title={copiedId === m.id ? "복사됨" : "복사하기"}
+                        >
+                          {copiedId === m.id ? (
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className="quote-btn"
+                        onClick={() => quoteMessage(m)}
+                        aria-label="이 답변 인용"
+                        title="이 답변을 인용해서 다시 질문하기"
+                      >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
+                          <polyline points="9 14 4 9 9 4" />
+                          <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
                         </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
+                      </button>
+                    </div>
 
+                    {m.sources && m.sources.length > 0 && (
+                      <details className="msg-sources">
+                        <summary>출처 더보기 ({m.sources.length})</summary>
+                        <ul>
+                          {m.sources.map((src) => (
+                            <li key={src.url}>
+                              <a href={src.url} target="_blank" rel="noopener noreferrer">
+                                {src.title || src.url}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+
+                    {generatedDocuments[m.id] && (
+                      <div className="generated-file-card">
+                        <div className="generated-file-icon">
+                          📄
+                        </div>
+
+                        <div className="generated-file-info">
+                          <div className="generated-file-name">
+                            {generatedDocuments[m.id].fileName}
+                          </div>
+                          <div className="generated-file-type">
+                            {generatedDocuments[m.id].format.toUpperCase()}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="generated-file-download"
+                          onClick={() => downloadGeneratedDocument(m)}
+                        >
+                          다운로드
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {m.promptSessionId != null && (
                     <div className="satisfaction-row">
                       {satisfaction[m.id] ? (
@@ -506,7 +849,8 @@ export default function ChatThreadPage() {
                         <span className="consent-done">저장했어요, 다음 추천에 반영할게요</span>
                       ) : (
                         <>
-                          <div className="consent-title">수신자 프로필 감지</div>
+                        {/* TODO: mock 문구 제거 */}
+                          <div className="consent-title">수신자 프로필 감지 (mock)</div>
                           <div className="consent-name">{pendingConsent.name}</div>
 
                           {/* TODO: (목업) 실제 스타일 분석 붙으면 MOCK_STYLE_HINTS 제거하고 이 블록 교체 */}
@@ -515,9 +859,6 @@ export default function ChatThreadPage() {
                               <li key={hint}>{hint}</li>
                             ))}
                           </ul>
-                          <div className="consent-mock-note">
-                            ※ 아래는 예시입니다. 실제 스타일 분석 기능은 아직 없어요.
-                          </div>
 
                           <div className="consent-question">
                             앞으로 <b>{pendingConsent.name}</b> 기본 스타일로 저장할까요?
@@ -553,6 +894,18 @@ export default function ChatThreadPage() {
               <div className="status-box">
                 <span className="loading-spinner" aria-hidden="true" />
                 <span className="status-title">답변 생성 중<span className="dots">···</span></span>
+                <button
+                  type="button"
+                  className="status-stop-btn"
+                  onClick={stopGenerating}
+                  aria-label="답변 생성 중단"
+                  title="답변 생성을 중단합니다"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                  중단
+                </button>
               </div>
             </div>
           )}
@@ -569,6 +922,10 @@ export default function ChatThreadPage() {
         chatSessionId={chatSessionId}
         quotedMessage={quotedMessage}
         onClearQuote={() => setQuotedMessage(null)}
+        receiverProfiles={receiverProfiles}
+        onReceiverProfileChange={(profile) =>
+          setSelectedReceiverProfileId(profile?.id ?? null)
+        }
       />
     </div>
   )
