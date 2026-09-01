@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services.suggest_hcx import (
+    _candidate_is_audience_safe,
     _candidate_is_diagnosis_safe,
     _context_candidate_has_only_allowed_numbers,
     _merge_prompt_with_candidate,
@@ -127,7 +128,7 @@ class SuggestionDiagnosisGuardTest(unittest.TestCase):
             )
         )
 
-    @patch("app.services.suggest_hcx.predict_missing")
+    @patch("app.services.suggest_hcx.predict_missing_with_rules")
     def test_filters_generated_candidates_and_preserves_generation_order(
         self,
         mock_predict_missing,
@@ -164,6 +165,26 @@ class SuggestionDiagnosisGuardTest(unittest.TestCase):
             3,
         )
 
+    def test_audience_guard_accepts_prompt_instruction(self):
+        self.assertTrue(
+            _candidate_is_audience_safe(
+                "팀장님께 전달하는 메일로 작성해줘."
+            )
+        )
 
+    def test_audience_guard_rejects_email_body_sentence(self):
+        self.assertFalse(
+            _candidate_is_audience_safe(
+                "관련 팀에 전달하였습니다."
+            )
+        )
+
+    def test_audience_guard_rejects_action_only_sentence(self):
+        self.assertFalse(
+            _candidate_is_audience_safe(
+                "프로젝트 일정 연기에 대한 사항을 팀원들에게 공유해 주세요."
+            )
+        )
+        
 if __name__ == "__main__":
     unittest.main()

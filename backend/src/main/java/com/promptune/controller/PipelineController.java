@@ -1,20 +1,16 @@
 package com.promptune.controller;
 
-import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable; // 추가
-import org.springframework.web.bind.annotation.PostMapping; // 추가
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.promptune.domain.User;
-import com.promptune.dto.PipelineDtos.*;
 import com.promptune.dto.PipelineDtos.AnalyzeRequest;
 import com.promptune.dto.PipelineDtos.AnalyzeResponse;
 import com.promptune.dto.PipelineDtos.DiagnoseResult;
@@ -25,10 +21,10 @@ import com.promptune.dto.PipelineDtos.SuggestResult;
 import com.promptune.repository.UserRepository;
 import com.promptune.service.AiServiceClient;
 import com.promptune.service.BehaviorLogService;
+import com.promptune.service.ConsentService;
 import com.promptune.service.GateService;
 import com.promptune.service.GraphMockService;
 import com.promptune.service.RecommendService;
-import com.promptune.service.ConsentService;
 
 /**
  * 파이프라인 오케스트레이터.
@@ -257,6 +253,17 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
 
     promptSessionRepository.save(session);
 
+    // RETRY_DUPLICATE_MESSAGE_BUG 후속 수정 (2026-08-27):
+    // 위 aiText == null 케이스만 delete를 해주고 있었는데, 그건 ai.generate()/
+    // validateWithRetry()가 "예외 없이 정상 리턴됐지만 result가 비어있는" 경우만
+    // 커버한다. ai.retrievalExecute()/ai.generate()/validateWithRetry() 자체가
+    // 타임아웃·네트워크 오류 등으로 예외를 던지며 실패하는 경우엔 그 if문에
+    // 도달하지도 못해서, 파이프라인 초반에 저장해둔 이 빈 session이 그대로 DB에
+    // 남았다. 아래 블록 전체를 try로 감싸고, 그 안에서 던져지는 모든 런타임
+    // 예외를 여기서 잡아 session을 지운 뒤 그대로 다시 던지도록 해서 두 케이스를
+    // 전부 커버한다.
+    // (prompt_session_documents는 ON DELETE CASCADE라 첨부 연결도 같이 안전하게 정리됨)
+    try {
     linkCurrentAttachments(
             req.documentIds(),
             userId,
@@ -264,14 +271,16 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
 
     // Retrieval Router/Orchestrator(승연님 PR #67)가 내부문서 검색·웹검색 여부까지
     // 통째로 판단·실행해서 결과를 돌려줌. 자바 쪽 needsInternalDocs/ai.retrieve()는 더 이상 안 씀.
-    // TODO: 사용자가 웹검색 버튼 켰는지(req.useWebSearch())를 retrieval-execute에 전달해야
-    // "내부문서+웹검색 복합 요청"이 동작함. 승연님과 함께 필드 추가 작업 진행 중.
-    //
+    // 사용자 Web 검색 요청은 retrieval-execute까지 전달되며,
+    // 내부 문서와 Web을 동시에 사용하는 복합 Retrieval도 지원한다.
     // 2026-08-25: TAVILY_API_KEY가 prod에 없으면 web_search/external_or_realtime
     // 라우트로 분류된 요청은 ai-service의 /retrieval-execute가 500을 던지는데,
     // 그걸 그대로 흘려보내면 /api/execute 전체가 실패해서 채팅 자체가 안 됐음
     // (아래 user_context/Microsoft 미연동과 동일한 부류의 fail-open 처리 필요 -
     // 검색이 안 되면 검색 없이라도 답변은 계속 생성돼야 함).
+    Map<String, String> routingUserContext =
+            buildRoutingUserContext(authentication);
+
     Map<String, Object> retrieval;
     try {
         // 2026-08-25: TAVILY_API_KEY 등록 후 실제 웹검색 결과가 붙자, 결과 하나당
@@ -284,7 +293,9 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
                 userId,
                 4,
                 conversationHistory,
-                retrievalDocumentIds);
+                retrievalDocumentIds,
+                Boolean.TRUE.equals(req.useWebSearch()),
+                routingUserContext);
     } catch (Exception e) {
         // 첨부/이전 문서가 명확한 요청에서 Retrieval 실패를 숨기고 일반 HCX 답변으로
         // 넘어가면 모델이 과거 문서나 임의 문서를 근거로 답하는 치명적 오류가 난다.
@@ -341,9 +352,14 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
     // (다른 보조 조회들과 동일하게) 실패는 조용히 무시하고 컨텍스트 없이 진행한다.
     // (안 그러면 user_context 라우트로 분류된 모든 메시지가 Microsoft 미연동
     // 사용자에게는 통째로 실패해버림 - 2026-08-24 채팅 전체 실패 이슈)
-    Map<String, String> userContext = new java.util.HashMap<>();
+    // routingUserContext는 retrieval에서 "현재 사용자 본인" 여부를
+    // 판별하기 위한 정보다. 일반 CHAT 생성 프롬프트에는 절대 주입하지 않는다.
+    Map<String, String> userContext =
+            new java.util.HashMap<>();
 
     if ("user_context".equals(retrieval.get("route"))) {
+        // 실제로 사용자 자신의 정보를 묻는 경우에만 생성 컨텍스트로 전달한다.
+        userContext.putAll(routingUserContext);
         try {
             com.fasterxml.jackson.databind.JsonNode profile =
                     microsoftGraphService.getProfile(userId);
@@ -407,7 +423,16 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
 
     // AI 응답 원문도 같이 저장 (이제까지 저장 안 되고 있던 부분 — 메시지 목록에 필요해서 추가)
     Object aiText = result != null ? result.get("result") : null;
-    session.setAiResponseText(aiText != null ? aiText.toString() : null);
+
+    if (aiText == null) {
+        // 생성 실패(result가 비어있는 케이스) - 아래 catch(RuntimeException)가
+        // 이 예외를 잡아서 session을 지운 뒤 다시 던진다.
+        throw new ResponseStatusException(
+                org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                "응답 생성에 실패했습니다.");
+    }
+
+    session.setAiResponseText(aiText.toString());
     promptSessionRepository.save(session);
 
     // 첨부 관계는 documents.prompt_session_id 단일 컬럼이 아니라
@@ -479,6 +504,45 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
     // Web 검색 결과의 실제 출처를 클라이언트에서도 확인할 수 있게 유지한다.
     response.put("sources", buildSources(webResults));
     return response;
+    } catch (RuntimeException e) {
+        // 2026-08-27 되돌림: 이전엔 실패하면 무조건 session을 지웠는데, 그러니
+        // 응답을 못 받은 프롬프트가 새로고침 후 화면에서 아예 안 보이는 문제가
+        // 생겼다(예진님 피드백) - "재전송을 여러 번 실패했을 때 중복으로 쌓이는
+        // 것"만 막으면 되는 거였지, 실패 흔적 자체를 다 지우라는 게 아니었음.
+        // 그래서 삭제는 하지 않고 session(prompt만 있고 응답 없음)을 그대로
+        // 둔다 - 프론트(buildLoadedMessages)가 같은 prompt로 연속된 실패
+        // 기록 중 마지막 하나만 남기고 접어서 보여주므로, 재시도해도 화면엔
+        // 중복 없이 항상 최소 1개는 남는다.
+        throw e;
+    }
+    }
+
+    private Map<String, String> buildRoutingUserContext(
+            org.springframework.security.core.Authentication authentication) {
+
+        Map<String, String> context =
+                new java.util.HashMap<>();
+
+        if (authentication == null
+                || authentication.getName() == null
+                || authentication.getName().isBlank()) {
+            return context;
+        }
+
+        userRepository.findByEmail(authentication.getName())
+                .ifPresent(user -> {
+                    if (user.getName() != null
+                            && !user.getName().isBlank()) {
+                        context.put("name", user.getName());
+                    }
+
+                    if (user.getEmail() != null
+                            && !user.getEmail().isBlank()) {
+                        context.put("email", user.getEmail());
+                    }
+                });
+
+        return context;
     }
 
     private java.util.List<java.util.Map<String, String>> buildSources(
@@ -854,7 +918,13 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         // 거슬러 올라가면 오히려 틀린 문서를 활성화한다. 이런 표현은 직전 2턴에
         // 첨부가 있을 때만 문서 참조로 해석하고, 명시적 "그 파일/거기서/문서 요약"
         // 표현은 더 이전 첨부까지 찾는다.
-        int maxLookback = isGenericDocumentReference(prompt) ? 2 : sessions.size();
+        int maxLookback =
+                isVerificationFollowup(prompt)
+                        ? 1
+                        : (isGenericDocumentReference(prompt)
+                                ? 2
+                                : sessions.size());
+
         int checked = 0;
 
         for (int i = sessions.size() - 1; i >= 0 && checked < maxLookback; i--, checked++) {
@@ -873,6 +943,27 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         }
 
         return java.util.List.of();
+    }
+
+    private boolean isVerificationFollowup(String prompt) {
+        String text = prompt == null
+                ? ""
+                : prompt.trim().toLowerCase();
+
+        return containsAnyText(
+                text,
+                "확실해",
+                "확실한가",
+                "맞아",
+                "맞나요",
+                "진짜야",
+                "정말이야",
+                "근거 있어",
+                "근거있어",
+                "출처 맞아",
+                "출처가 맞아",
+                "다시 확인",
+                "재확인");
     }
 
     private boolean isGenericDocumentReference(String prompt) {
@@ -1066,7 +1157,19 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
                 "문서 요약",
                 "파일 요약",
                 "프로젝트만",
-                "경력만"
+                "경력만",
+                "확실해",
+                "확실한가",
+                "맞아",
+                "맞나요",
+                "진짜야",
+                "정말이야",
+                "근거 있어",
+                "근거있어",
+                "출처 맞아",
+                "출처가 맞아",
+                "다시 확인",
+                "재확인"
         };
 
         for (String marker : markers) {
@@ -1100,33 +1203,61 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
             Map<String, String> preferenceMap,
             java.util.List<java.util.Map<String, String>> conversationHistory) {
 
-        Object generatedText = result != null ? result.get("result") : null;
+        Object generatedText =
+                result != null
+                        ? result.get("result")
+                        : null;
 
         if (generatedText == null) {
             return result;
         }
 
         Map validation =
-                ai.validate(originalPrompt, generatedText.toString());
+                ai.validate(
+                        originalPrompt,
+                        generatedText.toString(),
+                        documents,
+                        webResults);
 
         boolean passed =
-                Boolean.TRUE.equals(validation.get("passed"));
+                Boolean.TRUE.equals(
+                        validation.get("passed"));
 
         if (passed) {
             return result;
         }
 
-        Map retryResult = ai.generate(
-                originalPrompt,
-                taskType,
-                documents,
-                webResults,
-                userContext,
-                preferenceMap,
-                conversationHistory);
+        Object issuesObject =
+                validation.get("issues");
+
+        String issues =
+                issuesObject == null
+                        ? "요청 형식 또는 근거 사실을 지키지 못했습니다."
+                        : issuesObject.toString();
+
+        String retryPrompt =
+                originalPrompt
+                        + "\n\n[재생성 검증 지시]"
+                        + "\n이전 답변에 다음 문제가 있었습니다: "
+                        + issues
+                        + "\n제공된 내부 문서/웹 검색 근거에 있는 사실만 사용하세요."
+                        + "\n특히 이름, 본명, 소속, 날짜, 수치 등을 추측하지 마세요."
+                        + "\n이 지시문 자체는 최종 답변에서 언급하지 마세요.";
+
+        Map retryResult =
+                ai.generate(
+                        retryPrompt,
+                        taskType,
+                        documents,
+                        webResults,
+                        userContext,
+                        preferenceMap,
+                        conversationHistory);
 
         Object retryText =
-                retryResult != null ? retryResult.get("result") : null;
+                retryResult != null
+                        ? retryResult.get("result")
+                        : null;
 
         if (retryText == null) {
             throw new ResponseStatusException(
@@ -1135,10 +1266,15 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         }
 
         Map retryValidation =
-                ai.validate(originalPrompt, retryText.toString());
+                ai.validate(
+                        originalPrompt,
+                        retryText.toString(),
+                        documents,
+                        webResults);
 
         boolean retryPassed =
-                Boolean.TRUE.equals(retryValidation.get("passed"));
+                Boolean.TRUE.equals(
+                        retryValidation.get("passed"));
 
         if (!retryPassed) {
             throw new ResponseStatusException(

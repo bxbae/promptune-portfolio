@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import re
 
+from app.services.retrieval.query_intent import (
+    extract_external_entity_subject,
+)
+
 
 """
 2026-08-26: "이강인 축구선수에대해 알려줘 지금 소속팀과 프로필 부탁해. 요약해줘.
@@ -47,8 +51,20 @@ _STOCK_PHRASES = {
     # "이강인 소속과 프로필" 질의가 위키/나무위키 인물 정보 대신 골/데뷔전
     # 뉴스 기사 쪽으로 쏠려 프로필 항목이 부실해진 사례가 확인됨.
     "최근 골 소식과 관련해서",
+    # 2026-08-31: "최근 일주일 이전 기준으로"("최근 이슈와 관련해"를 사용자가
+    # 기간 지정형으로 고쳐 붙인 변형으로 보임)도 이 집합에 없어서 검색어에
+    # 그대로 남았고, "이강인 소속과 프로필을 알려줘" 질의의 실제 검색어가
+    # "이강인 소속과 프로필을 알려줘 최근 일주일 이전 기준으로 전문용어는 꼭
+    # 포함해서"로 오염돼 Tavily가 완전히 무관한 결과(G-DRAGON, 감스트 나무위키
+    # 문서, relevance score 0.06/0.04)를 반환했고, HCX가 근거 없이 소속팀을
+    # 잘못 지어내는(맨체스터 유나이티드 - 실제로는 무관) 사례로 이어짐.
+    "최근 일주일 이전 기준으로",
     # CONSTRAINT
     "전문용어는 빼고", "숫자는 꼭 포함해서", "회사명은 언급하지 말고",
+    # 2026-08-31: 위와 같은 사례에서 "전문용어는 빼고"의 반대 표현인 "전문용어는
+    # 꼭 포함해서"도 이 집합에 없어서 검색어를 오염시켰다 - CONSTRAINT 상투구는
+    # 긍정/부정 변형을 모두 등록해야 한다.
+    "전문용어는 꼭 포함해서",
     # EXAMPLE
     "지난번 양식처럼", "첨부 샘플 참고해서", "기존 템플릿 기반으로",
     # TASK - 다른 절에 이미 실제 요청이 있고, 이 절이 그냥 중복되는 동사만
@@ -118,6 +134,10 @@ def build_search_query(query: str) -> str:
 
     if not original:
         return original
+
+    entity_subject = extract_external_entity_subject(original)
+    if entity_subject:
+        return entity_subject
 
     # 검색 주체 명사에 "에대해/에 대해/에관해/에 관해"가 (띄어쓰기 유무와
     # 무관하게) 그대로 들러붙어 검색어를 오염시키지 않도록, 절을 나누기 전에

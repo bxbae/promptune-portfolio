@@ -11,8 +11,11 @@ from app.schemas.models import (
     SuggestRequest,
     SuggestResponse,
     Suggestion,
+    SuggestionAnchor,
 )
-from app.services.diagnose_real import predict_missing
+
+from app.services.anchor_selector import select_anchor
+from app.services.diagnose_real import predict_missing_with_rules
 from app.services.hcx_runtime import (
     hcx_lock,
     load_hcx_runtime,
@@ -282,6 +285,52 @@ def _build_generation_prompt(
         else "별도 업무 맥락 없음"
     )
 
+    element_specific_rules = ""
+
+    if element == "AUDIENCE":
+        element_specific_rules = (
+            "AUDIENCE 전용 규칙:\n"
+            "- 각 후보는 반드시 결과물을 누가 읽거나 받을지 명시해야 해.\n"
+            "- 일정, 원인, 진행 상황 등 원문의 내용을 다시 설명하는 문장을 만들지 마.\n"
+            "- 사용자가 제공하지 않은 특정 인물 이름, 실제 직급, 회사명은 만들지 마.\n"
+            "- 구체적인 수신자가 주어지지 않았다면 특정 사실을 단정하지 말고, "
+            "사용자가 선택할 수 있는 일반적인 업무상 수신 대상 범주를 제안해.\n"
+            "- 각 후보의 핵심은 반드시 수신 대상이어야 하고, "
+            "원문 뒤에 붙였을 때 그 대상이 명확해져야 해.\n"
+            "- 후보는 이메일 본문이 아니라 원문 프롬프트에 추가할 지시문이어야 해.\n"
+            "- 원문에 있는 일정, 날짜, 원인, 진행 상황을 후보에서 반복하지 마.\n"
+            "- '알려드립니다', '공유드립니다', '확인해 주시기 바랍니다'처럼 "
+            "완성된 이메일 본문 표현을 사용하지 마.\n"
+            "- 후보는 '...에게 전달하는 메일로 작성해줘', "
+            "'...을 대상으로 작성해줘' 같은 요청문 형태로 작성해.\n\n"
+            "- 출력 형식은 반드시 아래 두 형태 중 하나만 사용해.\n"
+            "  1) '[수신 대상]에게 보내는 메일로 작성해줘.'\n"
+            "  2) '수신자를 [수신 대상]으로 설정해줘.'\n"
+            "- '공유해줘', '보고해줘', '전달해줘'처럼 "
+            "메일 작성 요청이 사라지는 형태는 절대 출력하지 마.\n"
+            "- 위 두 형식 외의 문장은 후보로 출력하지 마.\n\n"
+        )
+
+    elif element == "CONSTRAINT":
+        element_specific_rules = (
+            "CONSTRAINT 전용 규칙:\n"
+            "- 후보는 결과물이 반드시 지켜야 할 제한이나 제외 조건이어야 해.\n"
+            "- 원문에 없는 사실, 일정, 수치, 회사명, 사람을 새로 만들지 마.\n"
+            "- '정확하게 작성해줘', '잘 작성해줘' 같은 모호한 표현은 쓰지 마.\n"
+            "- '특정 내용은 제외해줘', '불필요한 추측은 포함하지 마'처럼 "
+            "실제로 적용 가능한 제약 지시문 형태로 작성해.\n\n"
+        )
+
+    elif element == "EXAMPLE":
+        element_specific_rules = (
+            "EXAMPLE 전용 규칙:\n"
+            "- 후보는 사용자가 원하는 결과 형태를 참고할 수 있는 예시 조건이어야 해.\n"
+            "- 실제 인물, 회사, 날짜, 수치 등 제공되지 않은 사실을 예시로 만들지 마.\n"
+            "- 완성된 최종 답변을 대신 작성하지 마.\n"
+            "- '예시는 문제-원인-해결 방식의 짧은 문장을 참고해줘'처럼 "
+            "형태나 구조를 참고할 수 있는 지시문으로 작성해.\n\n"
+        )
+
     return (
         f"사용자 원문:\n{text}\n\n"
         f"업무 맥락:\n{context_text}\n\n"
@@ -297,6 +346,8 @@ def _build_generation_prompt(
         "가장 중요한 원칙:\n"
         "- 추천은 제공된 정보를 재표현하거나 선택하기 쉽게 만드는 것이다.\n"
         "- 제공되지 않은 업무 상황이나 사실을 새로 만들어내는 것이 아니다.\n\n"
+
+        f"{element_specific_rules}"
 
         "규칙:\n"
         "1. 각 후보는 원문 뒤에 바로 붙여도 자연스러운 완결된 문장이어야 해.\n"
@@ -527,7 +578,55 @@ def _filter_context_grounded_candidates(
 
     return grounded_candidates
 
+def _candidate_is_audience_safe(candidate: str) -> bool:
+    """
+    AUDIENCE 추천 후보가 이메일 본문이 아니라
+    수신 대상을 보완하는 프롬프트 지시문인지 검사한다.
+    """
+    normalized = candidate.strip()
 
+    if not normalized:
+        return False
+
+    body_like_patterns = (
+        r"전달하였습니다",
+        r"전달했습니다",
+        r"공유하였습니다",
+        r"공유했습니다",
+        r"알려드립니다",
+        r"안내드립니다",
+        r"확인해\s*주시기",
+    )
+
+    if any(
+        re.search(pattern, normalized)
+        for pattern in body_like_patterns
+    ):
+        return False
+
+    prompt_instruction_patterns = (
+        r"(?:메일|이메일).*(?:작성|써|보내)",
+        r"수신자.*(?:설정|지정)",
+        r"수신\s*대상.*(?:설정|지정)",
+    )
+
+    if not any(
+        re.search(pattern, normalized)
+        for pattern in prompt_instruction_patterns
+    ):
+        return False
+
+    audience_patterns = (
+        r"\S+\s*(?:에게|께|한테)",
+        r"\S+\s*(?:을|를)\s*대상으로",
+        r"수신자",
+        r"수신\s*대상",
+    )
+
+    return any(
+        re.search(pattern, normalized)
+        for pattern in audience_patterns
+    )
 
 
 
@@ -566,6 +665,17 @@ def _validate_generated_candidates(
     valid: list[str] = []
 
     for candidate in candidates:
+        if (
+            element == "AUDIENCE"
+            and not _candidate_is_audience_safe(candidate)
+        ):
+            logger.info(
+                "Generated AUDIENCE suggestion rejected by "
+                "audience guard candidate=%r",
+                candidate,
+            )
+            continue
+
         merged = _merge_prompt_with_candidate(
             text,
             candidate,
@@ -573,7 +683,7 @@ def _validate_generated_candidates(
         )
 
         try:
-            after = predict_missing(merged)
+            after = predict_missing_with_rules(merged)
 
         except Exception:
             logger.exception(
@@ -613,7 +723,7 @@ def suggest(
 
     suggestions: list[Suggestion] = []
 
-    baseline_missing = predict_missing(
+    baseline_missing = predict_missing_with_rules(
         req.text
     )
 
@@ -695,28 +805,65 @@ def suggest(
                 )
                 continue
 
-        if not grounded_candidates:
+                valid_candidates: list[str] = []
+
+        if grounded_candidates:
+            valid_candidates = _validate_generated_candidates(
+                text=req.text,
+                element=element,
+                candidates=grounded_candidates,
+                baseline=baseline_missing,
+            )
+        else:
             logger.warning(
                 "No context-grounded generated suggestion "
                 "element=%s text=%r",
                 element,
                 req.text,
             )
-            continue
 
-        valid_candidates = _validate_generated_candidates(
-            text=req.text,
-            element=element,
-            candidates=grounded_candidates,
-            baseline=baseline_missing,
-        )
+        # CONTEXT 후보가 Grounding 또는 Diagnosis Guard에서 모두 탈락하더라도,
+        # 사용자가 명시적으로 제공한 context가 있으면 마지막 안전 후보로 검증한다.
+        #
+        # 고정 fallback이나 새 사실을 생성하는 것이 아니라 사용자가 직접 제공한
+        # context를 그대로 사용하며, BGE grounding과 Diagnosis Guard를 우회하지 않는다.
+        if (
+            not valid_candidates
+            and element == "CONTEXT"
+            and context
+            and context not in grounded_candidates
+        ):
+            logger.warning(
+                "No safe generated CONTEXT suggestion; "
+                "trying explicit context fallback "
+                "text=%r",
+                req.text,
+            )
 
-        # Grounding과 Diagnosis Guard를 모두 통과한 후보만 노출한다.
-        # 안전한 후보가 없으면 고정 fallback이나 추가 재생성 없이 빈 추천으로 끝낸다.
+            try:
+                fallback_grounded = (
+                    _filter_context_grounded_candidates(
+                        context=context,
+                        candidates=[context],
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "BGE-M3 explicit CONTEXT fallback grounding failed"
+                )
+                fallback_grounded = []
+
+            if fallback_grounded:
+                valid_candidates = _validate_generated_candidates(
+                    text=req.text,
+                    element=element,
+                    candidates=fallback_grounded,
+                    baseline=baseline_missing,
+                )
 
         if not valid_candidates:
             logger.warning(
-                "No diagnosis-safe generated suggestion "
+                "No safe suggestion after grounding and diagnosis guard "
                 "element=%s text=%r",
                 element,
                 req.text,
@@ -727,11 +874,20 @@ def suggest(
             :MAX_EXPOSED_CANDIDATES
         ]
 
+        anchor = select_anchor(
+            req.text,
+            element,
+        )
+
         suggestions.append(
             Suggestion(
                 element=element,
                 primary=exposed_candidates[0],
                 alternatives=exposed_candidates[1:],
+                anchor=SuggestionAnchor(
+                    sentence_index=anchor.sentence_index,
+                    char_offset=anchor.char_offset,
+                ),
             )
         )
 

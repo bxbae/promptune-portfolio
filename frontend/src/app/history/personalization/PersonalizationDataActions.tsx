@@ -6,6 +6,27 @@ import {
   resetPersonalization,
 } from "@/api/personalization";
 import { listReceiverProfiles, deleteReceiverProfile } from "@/api/receiverProfiles";
+import ConfirmDialog from "@/components/ConfirmDialog";
+
+type PendingAction = "receivers" | "history" | "reset";
+
+const CONFIRM_TEXT: Record<PendingAction, { title: string; message: string; confirmLabel: string }> = {
+  receivers: {
+    title: "수신자별 학습 데이터 초기화",
+    message: "모든 수신자 스타일 프로필을 지우고 새로 학습할까요? 삭제한 데이터는 복구할 수 없습니다.",
+    confirmLabel: "초기화",
+  },
+  history: {
+    title: "작업 이력 전체 삭제",
+    message: "작업 이력(채팅·프롬프트 기록) 전체를 삭제할까요? 삭제한 데이터는 복구할 수 없습니다.",
+    confirmLabel: "삭제",
+  },
+  reset: {
+    title: "전체 개인화 데이터 초기화",
+    message: "설정 + 수신자 스타일 + 수정 이력을 전부 삭제할까요? 삭제한 데이터는 복구할 수 없습니다.",
+    confirmLabel: "초기화",
+  },
+};
 
 // 개인화 데이터(습관 데이터·수신자 프로필) 전체 초기화 / 내보내기 + 작업 이력(채팅 기록) 전체 삭제.
 // - "전체 초기화"·"내보내기"는 백엔드 PersonalizationController가 이미 제공 (선호 설정+수신자 프로필+관련 동의/학습 데이터)
@@ -14,9 +35,10 @@ export default function PersonalizationDataActions() {
   const [busy, setBusy] = useState<"receivers" | "history" | "export" | "reset" | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  // 파괴적 액션 3개(초기화/삭제/전체초기화)를 공용 모달 하나로 처리 - 누른 버튼 기억
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
 
-  async function handleResetReceivers() {
-    if (!confirm("모든 수신자 스타일 프로필을 지우고 새로 학습할까요? 삭제한 데이터는 복구할 수 없습니다.")) return;
+  async function doResetReceivers() {
     setBusy("receivers");
     setError("");
     setMessage("");
@@ -31,8 +53,7 @@ export default function PersonalizationDataActions() {
     }
   }
 
-  async function handleDeleteHistory() {
-    if (!confirm("작업 이력(채팅·프롬프트 기록) 전체를 삭제할까요? 삭제한 데이터는 복구할 수 없습니다.")) return;
+  async function doDeleteHistory() {
     setBusy("history");
     setError("");
     setMessage("");
@@ -67,8 +88,7 @@ export default function PersonalizationDataActions() {
     }
   }
 
-  async function handleResetAll() {
-    if (!confirm("설정 + 수신자 스타일 + 수정 이력을 전부 삭제할까요? 삭제한 데이터는 복구할 수 없습니다.")) return;
+  async function doResetAll() {
     setBusy("reset");
     setError("");
     setMessage("");
@@ -82,6 +102,18 @@ export default function PersonalizationDataActions() {
     }
   }
 
+  const ACTION_RUNNERS: Record<PendingAction, () => Promise<void>> = {
+    receivers: doResetReceivers,
+    history: doDeleteHistory,
+    reset: doResetAll,
+  };
+
+  async function handleConfirm() {
+    if (!pendingAction) return;
+    await ACTION_RUNNERS[pendingAction]();
+    setPendingAction(null);
+  }
+
   return (
     <>
       <div className="pref-data-box">
@@ -92,7 +124,7 @@ export default function PersonalizationDataActions() {
             <div className="pref-data-row-title">수신자별 학습 데이터 초기화</div>
             <div className="pref-data-row-desc">모든 수신자 스타일 프로필을 지우고 새로 학습</div>
           </div>
-          <button onClick={handleResetReceivers} disabled={busy !== null} style={buttonStyle()}>
+          <button onClick={() => setPendingAction("receivers")} disabled={busy !== null} style={buttonStyle()}>
             {busy === "receivers" ? "초기화 중..." : "초기화"}
           </button>
         </div>
@@ -102,7 +134,7 @@ export default function PersonalizationDataActions() {
             <div className="pref-data-row-title">작업 이력 전체 삭제</div>
             <div className="pref-data-row-desc">채팅·프롬프트 기록을 모두 삭제</div>
           </div>
-          <button onClick={handleDeleteHistory} disabled={busy !== null} style={buttonStyle()}>
+          <button onClick={() => setPendingAction("history")} disabled={busy !== null} style={buttonStyle()}>
             {busy === "history" ? "삭제 중..." : "삭제"}
           </button>
         </div>
@@ -126,10 +158,21 @@ export default function PersonalizationDataActions() {
         <div>
           <div className="pref-data-row-title" style={{ color: "var(--block)" }}>전체 개인화 데이터 초기화 <span className="pref-data-row-desc">설정 + 수신자 스타일 + 수정 이력 전부 삭제</span></div>
         </div>
-        <button onClick={handleResetAll} disabled={busy !== null} style={buttonStyle(true)}>
+        <button onClick={() => setPendingAction("reset")} disabled={busy !== null} style={buttonStyle(true)}>
           {busy === "reset" ? "초기화 중..." : "전체 초기화"}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction ? CONFIRM_TEXT[pendingAction].title : ""}
+        message={pendingAction ? CONFIRM_TEXT[pendingAction].message : ""}
+        confirmLabel={pendingAction ? CONFIRM_TEXT[pendingAction].confirmLabel : "확인"}
+        danger
+        loading={busy !== null}
+        onConfirm={handleConfirm}
+        onCancel={() => setPendingAction(null)}
+      />
     </>
   );
 }

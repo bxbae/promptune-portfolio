@@ -73,15 +73,16 @@ public class DocumentController {
         String resolvedTitle = (title == null || title.isBlank())
                 ? file.getOriginalFilename()
                 : title;
+        resolvedTitle = resolveUniqueTitle(user.getId(), resolvedTitle);
         String fileType = extractExtension(file.getOriginalFilename());
         byte[] uploadContent =
                 normalizeUploadedContent(fileType, file);
 
         if (fileType == null
-                || !List.of("pdf", "docx", "txt", "md").contains(fileType)) {
+                || !List.of("pdf", "docx", "txt", "md", "xlsx", "pptx").contains(fileType)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "현재 AI 문서 분석은 PDF, DOCX, TXT, MD 형식만 지원합니다.");
+                    "현재 AI 문서 분석은 PDF, DOCX, TXT, MD, XLSX, PPTX 형식만 지원합니다.");
         }
 
         String originalFilename =
@@ -562,6 +563,30 @@ public class DocumentController {
         }
 
         return message;
+    }
+
+    // 같은 사용자가 같은 제목의 문서를 이미 갖고 있으면 "제목 (2)", "제목 (3)"처럼
+    // 번호를 붙여서 구분한다. 덮어쓰기는 다른 대화가 참조 중인 파일 내용이
+    // 조용히 바뀔 위험이 있어 채택하지 않음 (팀 결정).
+    private String resolveUniqueTitle(Long ownerUserId, String desiredTitle) {
+        List<Document> existing = documentRepository.findByOwnerUserId(ownerUserId);
+        java.util.Set<String> existingTitles = new java.util.HashSet<>();
+        for (Document d : existing) {
+            existingTitles.add(d.getTitle());
+        }
+
+        if (!existingTitles.contains(desiredTitle)) {
+            return desiredTitle;
+        }
+
+        int counter = 2;
+        String candidate;
+        do {
+            candidate = desiredTitle + " (" + counter + ")";
+            counter++;
+        } while (existingTitles.contains(candidate));
+
+        return candidate;
     }
 
     private String extractExtension(String filename) {

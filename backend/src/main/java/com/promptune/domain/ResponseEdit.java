@@ -17,10 +17,10 @@ public class ResponseEdit {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "generated_result", columnDefinition = "TEXT", nullable = false)
+    @Column(name = "generated_result", columnDefinition = "CLOB", nullable = false)
     private String generatedResult;
 
-    @Column(name = "user_final_result", columnDefinition = "TEXT", nullable = false)
+    @Column(name = "user_final_result", columnDefinition = "CLOB", nullable = false)
     private String userFinalResult;
 
     @Column(name = "created_at")

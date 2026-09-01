@@ -15,7 +15,9 @@ _MAX_LENGTH_RE = re.compile(
 )
 
 _ITEM_COUNT_RE = re.compile(
-    r"(?P<count>\d+)\s*(?:"
+    r"(?P<count>\d+)"
+    r"(?:\s*~\s*(?P<max_count>\d+))?"
+    r"\s*(?:"
     r"개(?:의)?\s*(?:항목|내용|포인트)"
     r"|개\s*(?:로|으로)\s*(?:정리|작성|제시|요약)"
     r"|가지(?:의)?\s*(?:항목|내용|포인트)"
@@ -106,14 +108,29 @@ def _validate_item_count(
     if match is None:
         return True
 
-    expected_count = int(match.group("count"))
+    min_count = int(match.group("count"))
+    max_count_text = match.group("max_count")
+    max_count = (
+        int(max_count_text)
+        if max_count_text is not None
+        else min_count
+    )
+
+    if max_count < min_count:
+        min_count, max_count = max_count, min_count
+
     actual_count = len(_LIST_ITEM_RE.findall(generated))
 
-    if actual_count == expected_count:
+    if min_count <= actual_count <= max_count:
         return True
 
+    requested = (
+        f"{min_count}개"
+        if min_count == max_count
+        else f"{min_count}~{max_count}개"
+    )
     issues.append(
-        f"항목 개수 조건 위반: 요청 {expected_count}개, 실제 {actual_count}개"
+        f"항목 개수 조건 위반: 요청 {requested}, 실제 {actual_count}개"
     )
     return False
 
@@ -171,6 +188,18 @@ def _constraint_number_spans(original: str) -> list[tuple[int, int]]:
             number_start = match.start("count")
             number_end = match.end("count")
             spans.append((number_start, number_end))
+
+            # "2~3가지로 정리"처럼 범위형 항목 수 조건에서는
+            # 상한 숫자도 사실 숫자가 아니라 출력 제약 숫자다.
+            if "max_count" in match.groupdict():
+                max_count = match.group("max_count")
+                if max_count is not None:
+                    spans.append(
+                        (
+                            match.start("max_count"),
+                            match.end("max_count"),
+                        )
+                    )
 
     # 전체 매치 구간을 그대로 쓴다 (named group이 없고, "3~4줄"처럼 숫자가
     # 둘 이상 붙는 범위 표현도 통째로 제외해야 하므로).

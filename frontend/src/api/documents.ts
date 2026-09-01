@@ -112,7 +112,6 @@ export async function fetchDocumentContent(id: number): Promise<Blob> {
 }
 
 // Update - PATCH /api/documents/{id} - title, description, documentType 수정 가능
-// TODO : 파일 자체 Update (덮어쓰기) 기능 추가 필요
 export async function updateDocument(
   id: number,
   patch: { title?: string; description?: string; documentType?: DocType }

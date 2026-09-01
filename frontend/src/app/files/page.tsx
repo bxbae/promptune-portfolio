@@ -9,6 +9,7 @@ import {
   DocumentItem,
   DocType,
 } from "@/api/documents";
+import ConfirmDialog from "@/components/ConfirmDialog";
 
 type Category = "전체" | DocType;
 const TABS: Category[] = ["전체", "규정", "양식", "가이드", "보고서", "기타"];
@@ -29,6 +30,14 @@ function previewKind(fileType: string | null): "doc" | "slide" | "photo" {
   return "doc"; // docx / pdf / txt / 기타
 }
 
+// txt/md는 실제 내용을 그대로 텍스트로 보여줄 수 있는 타입 (pdf/docx는 별도 렌더링 필요해서 제외)
+function isTextPreviewType(fileType: string | null): boolean {
+  const t = (fileType || "").toLowerCase();
+  return t === "txt" || t === "md";
+}
+
+const TEXT_PREVIEW_MAX_CHARS = 220;
+
 export default function FilesPage() {
   const [tab, setTab] = useState<Category>("전체");
   const [files, setFiles] = useState<DocumentItem[]>([]);
@@ -41,6 +50,10 @@ export default function FilesPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editDocType, setEditDocType] = useState<DocType>("기타");
   const [showUpload, setShowUpload] = useState(false);
+  // 파일 id -> 실제로 읽어온 앞부분 텍스트 (txt/md 썸네일용). 아직 안 불러왔으면 키 자체가 없음.
+  const [textPreviews, setTextPreviews] = useState<Record<number, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<DocumentItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   function refresh() {
     setLoading(true);
@@ -51,6 +64,40 @@ export default function FilesPage() {
   }
 
   useEffect(() => { refresh(); }, []);
+
+  // txt/md 파일은 목업 줄 대신 실제 앞부분 내용을 썸네일에 보여준다.
+  // 목록에 아직 안 불러온 txt/md가 있으면 하나씩 fetch해서 textPreviews에 채워넣는다.
+  useEffect(() => {
+    const targets = files.filter(
+      (f) => isTextPreviewType(f.fileType) && textPreviews[f.id] === undefined
+    );
+    if (targets.length === 0) return;
+
+    let cancelled = false;
+
+    (async () => {
+      for (const f of targets) {
+        try {
+          const blob = await fetchDocumentContent(f.id);
+          if (cancelled) return;
+          const buffer = await blob.arrayBuffer();
+          const text = new TextDecoder("utf-8").decode(buffer);
+          setTextPreviews((prev) => ({
+            ...prev,
+            [f.id]: text.slice(0, TEXT_PREVIEW_MAX_CHARS),
+          }));
+        } catch {
+          // 못 불러왔으면 빈 문자열로 표시해서 재시도 루프에 빠지지 않게만 하고, 렌더링에서 목업으로 대체
+          if (!cancelled) setTextPreviews((prev) => ({ ...prev, [f.id]: "" }));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
 
   const visible = tab === "전체" ? files : files.filter((f) => f.documentType === tab);
 
@@ -78,15 +125,23 @@ export default function FilesPage() {
     }
   }
 
-  // 삭제
-  async function handleDelete(f: DocumentItem) {
+  // 삭제 - 모달 띄움
+  function handleDelete(f: DocumentItem) {
     setOpenMenuId(null);
-    if (!confirm(`"${f.title}" 파일을 삭제할까요?`)) return;
+    setDeleteTarget(f);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await deleteDocument(f.id);
-      setFiles((prev) => prev.filter((x) => x.id !== f.id));
+      await deleteDocument(deleteTarget.id);
+      setFiles((prev) => prev.filter((x) => x.id !== deleteTarget.id));
+      setDeleteTarget(null);
     } catch (e: any) {
       alert(e.message || "삭제에 실패했습니다.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -208,71 +263,88 @@ pre {
         <div className="files-grid">
           {visible.map((file) => (
             <div
-                className="file-card"
-                key={file.id}
-                onClick={() => {
-                  if (editingId !== file.id) void handleOpen(file);
-                }}
-              >
+              className="file-card"
+              key={file.id}
+              onClick={() => {
+                if (editingId !== file.id) void handleOpen(file);
+              }}
+            >
               <div className="file-thumb">
-                {/* TODO: 카테고리별 배지 색상 구분 원하면 documentType 기준으로 클래스 분기 추가 */}
-                <span className="file-badge">{file.documentType}</span>
-                <button
-                  className="file-menu-btn"
-                  onClick={(e) => {
-                      e.stopPropagation();
-                      setOpenMenuId(openMenuId === file.id ? null : file.id);
-                    }}
-                  aria-label="파일 옵션"
+                <FilePreview
+                  kind={previewKind(file.fileType)}
+                  textPreview={isTextPreviewType(file.fileType) ? textPreviews[file.id] : undefined}
+                />
+              </div>
+
+              {/* file-name-wrap: 원래 파일명 자리는 항상 유지하고(높이 그대로), 수정 중이면
+                  그 위에 드롭다운으로 편집창을 겹쳐서 띄운다. 예전엔 이 자리가 통째로
+                  edit-row로 바뀌면서 카드 높이가 늘어나 같은 행의 다른 카드들까지 밀렸는데,
+                  position:absolute 오버레이라 레이아웃에 영향을 안 준다. */}
+              <div className="file-name-wrap">
+                <div
+                  className={`file-name${editingId === file.id ? " editing" : ""}`}
+                  title={file.title}
                 >
-                  <img src="/icons/dots.png" />
-                </button>
+                  <span className="file-name-base">{splitFilename(file.title).base}</span>
+                  <span className="file-name-ext">{splitFilename(file.title).ext}</span>
+                </div>
 
-                <FilePreview kind={previewKind(file.fileType)} />
-
-                {openMenuId === file.id && (
+                {editingId === file.id && (
                   <div
-                      className="file-menu"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                    <button onClick={() => startEdit(file)}>수정</button>
-                    <button className="danger" onClick={() => handleDelete(file)}>삭제</button>
+                    className="file-edit-dropdown"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      className="file-edit-input"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      placeholder="제목"
+                      autoFocus
+                    />
+                    <input
+                      className="file-edit-input"
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      placeholder="설명 (선택)"
+                    />
+
+                    <select value={editDocType} onChange={(e) => setEditDocType(e.target.value as DocType)}>
+                      {DOC_TYPES.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+
+                    <div className="file-edit-actions">
+                      <button className="file-edit-save" onClick={() => saveEdit(file.id)}>저장</button>
+                      <button className="file-edit-cancel" onClick={() => setEditingId(null)}>취소</button>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {editingId === file.id ? (
+              {/* 배지/메뉴 버튼은 이제 file-thumb 밖(=file-card 바로 아래)에 둔다.
+                  file-card가 file-thumb과 같은 폭/원점을 가져서 absolute 좌표는 그대로 유지되고
+                  (데스크톱은 변화 없음), 모바일 1열 가로형 카드에서는 자연스럽게 행의 끝에
+                  오도록 만들 수 있다 (전에는 좁은 thumb 안에 갇혀서 재배치가 불가능했음). */}
+              <span className="file-badge">{file.documentType}</span>
+              <button
+                className="file-menu-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenMenuId(openMenuId === file.id ? null : file.id);
+                }}
+                aria-label="파일 옵션"
+              >
+                <img src="/icons/dots.png" />
+              </button>
+
+              {openMenuId === file.id && (
                 <div
-                    className="file-edit-row"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                  <input
-                    className="file-edit-input"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    placeholder="제목"
-                    autoFocus
-                  />
-                  <input
-                    className="file-edit-input"
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    placeholder="설명 (선택)"
-                  />
-
-                  <select value={editDocType} onChange={(e) => setEditDocType(e.target.value as DocType)}>
-                    {DOC_TYPES.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-
-                  <button className="file-edit-save" onClick={() => saveEdit(file.id)}>저장</button>
-                  <button className="file-edit-cancel" onClick={() => setEditingId(null)}>취소</button>
-                </div>
-              ) : (
-                <div className="file-name" title={file.title}>
-                  <span className="file-name-base">{splitFilename(file.title).base}</span>
-                  <span className="file-name-ext">{splitFilename(file.title).ext}</span>
+                  className="file-menu"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button onClick={() => startEdit(file)}>수정</button>
+                  <button className="danger" onClick={() => handleDelete(file)}>삭제</button>
                 </div>
               )}
             </div>
@@ -288,7 +360,7 @@ pre {
       )}
 
       {showUpload && (
-        <UploadModal 
+        <UploadModal
           onClose={() => setShowUpload(false)}
           onUploaded={(doc) => {
             setFiles((prev) => [doc, ...prev]);
@@ -296,12 +368,37 @@ pre {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="파일 삭제"
+        message={`"${deleteTarget?.title}" 파일을 삭제할까요?`}
+        confirmLabel="삭제"
+        danger
+        loading={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }
 
 // 파일 썸네일
-function FilePreview({ kind }: { kind: "doc" | "slide" | "photo" }) {
+function FilePreview({
+  kind,
+  textPreview,
+}: {
+  kind: "doc" | "slide" | "photo";
+  textPreview?: string;
+}) {
+  // txt/md - 실제 파일 앞부분 텍스트를 그대로 보여줌 (fetch 완료된 경우만)
+  if (kind === "doc" && textPreview) {
+    return (
+      <div className="preview-doc-text">
+        <pre>{textPreview}</pre>
+      </div>
+    );
+  }
   if (kind === "slide") {
     return (
       <div className="preview-slide">
@@ -380,7 +477,7 @@ function UploadModal({
         <input
           className="modal-input"
           type="file"
-          accept=".pdf,.docx,.txt,.md"
+          accept=".pdf,.docx,.txt,.md,.xlsx,.pptx"
           onChange={handleFileChange}
         />
 

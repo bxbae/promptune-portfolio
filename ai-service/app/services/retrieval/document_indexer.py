@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 from docx import Document as DocxDocument
+from openpyxl import load_workbook
+from pptx import Presentation as PptxPresentation
 import pymupdf
 
 from app.services.retrieval.chunker import chunk_text
@@ -17,7 +19,7 @@ from app.services.retrieval.rag_retriever import (
 )
 
 
-SUPPORTED_FILE_TYPES = {"pdf", "docx", "txt", "md"}
+SUPPORTED_FILE_TYPES = {"pdf", "docx", "txt", "md", "xlsx", "pptx"}
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 
@@ -65,6 +67,36 @@ def extract_docx_text(file_bytes: bytes) -> str:
     return "\n".join(parts)
 
 
+def extract_xlsx_text(file_bytes: bytes) -> str:
+    """엑셀 각 시트를 순서대로 훑으며, 행마다 셀 값을 ' | '로 이어붙인 텍스트로 변환한다."""
+    workbook = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+    parts = []
+
+    for sheet in workbook.worksheets:
+        parts.append(f"[시트: {sheet.title}]")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    return "\n".join(parts)
+
+
+def extract_pptx_text(file_bytes: bytes) -> str:
+    prs = PptxPresentation(io.BytesIO(file_bytes))
+    parts = []
+
+    for i, slide in enumerate(prs.slides, 1):
+        slide_parts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                slide_parts.append(shape.text_frame.text.strip())
+        if slide_parts:
+            parts.append(f"[슬라이드 {i}]\n" + "\n".join(slide_parts))
+
+    return "\n\n".join(parts)
+
+
 def decode_text_file(file_bytes: bytes) -> str:
     for encoding in ("utf-8-sig", "utf-8", "cp949"):
         try:
@@ -86,6 +118,10 @@ def extract_text(file_bytes: bytes, file_type: str) -> str:
         text = extract_pdf_text(file_bytes)
     elif file_type == "docx":
         text = extract_docx_text(file_bytes)
+    elif file_type == "xlsx":
+        text = extract_xlsx_text(file_bytes)
+    elif file_type == "pptx":
+        text = extract_pptx_text(file_bytes)
     elif file_type in {"txt", "md"}:
         text = decode_text_file(file_bytes)
     else:
@@ -149,7 +185,7 @@ def verify_document_owner(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 """,
                 (document_id,),
             )
@@ -176,8 +212,8 @@ def load_document_metadata(
                 """
                 SELECT title, document_type, description
                 FROM documents
-                WHERE id = %s
-                  AND owner_user_id = %s
+                WHERE id = :1
+                  AND owner_user_id = :2
                 """,
                 (document_id, owner_user_id),
             )
@@ -237,7 +273,7 @@ def save_chunk_texts(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 FOR UPDATE
                 """,
                 (document_id,),
@@ -255,7 +291,7 @@ def save_chunk_texts(
                 )
 
             cur.execute(
-                "DELETE FROM document_chunks WHERE document_id = %s",
+                "DELETE FROM document_chunks WHERE document_id = :1",
                 (document_id,),
             )
 
@@ -264,7 +300,7 @@ def save_chunk_texts(
                 INSERT INTO document_chunks (
                     document_id, chunk_index, content, embedding
                 )
-                VALUES (%s, %s, %s, NULL)
+                VALUES (:1, :2, :3, NULL)
                 """,
                 [
                     (document_id, chunk_index, content)
@@ -287,7 +323,7 @@ def save_chunk_embeddings(
                 """
                 SELECT owner_user_id
                 FROM documents
-                WHERE id = %s
+                WHERE id = :1
                 FOR UPDATE
                 """,
                 (document_id,),
@@ -304,12 +340,14 @@ def save_chunk_embeddings(
                     "문서 소유자가 일치하지 않습니다."
                 )
 
+            # PostgreSQL의 %s::vector 캐스트 → Oracle은 TO_VECTOR(:1)로 문자열을
+            # VECTOR 타입으로 변환한다.
             cur.executemany(
                 """
                 UPDATE document_chunks
-                SET embedding = %s::vector
-                WHERE document_id = %s
-                  AND chunk_index = %s
+                SET embedding = TO_VECTOR(:1)
+                WHERE document_id = :2
+                  AND chunk_index = :3
                 """,
                 [
                     (

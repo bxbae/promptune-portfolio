@@ -29,6 +29,39 @@ class ValidationRuleTest(unittest.TestCase):
 
         self.assertTrue(result.item_count_ok)
 
+    def test_requested_item_count_range_passes(self):
+        original = "핵심 내용을 2~3가지로 정리해줘"
+        generated = "- 첫 번째\n- 두 번째"
+
+        result = validate_rules(original, generated)
+
+        self.assertTrue(result.item_count_ok)
+        self.assertTrue(result.facts_preserved)
+
+    def test_requested_item_count_range_fails_below_minimum(self):
+        original = "핵심 내용을 2~3가지로 정리해줘"
+        generated = "- 첫 번째"
+
+        result = validate_rules(original, generated)
+
+        self.assertFalse(result.item_count_ok)
+
+    def test_requested_item_count_range_fails_above_maximum(self):
+        original = "핵심 내용을 2~3가지로 정리해줘"
+        generated = "- 첫 번째\n- 두 번째\n- 세 번째\n- 네 번째"
+
+        result = validate_rules(original, generated)
+
+        self.assertFalse(result.item_count_ok)
+
+    def test_item_count_range_numbers_are_not_treated_as_facts(self):
+        original = "핵심 내용을 2~3가지로 정리해줘"
+        generated = "- 핵심 A\n- 핵심 B"
+
+        result = validate_rules(original, generated)
+
+        self.assertTrue(result.facts_preserved)
+
     def test_markdown_table_passes(self):
         original = "결과를 표 형식으로 정리해줘"
         generated = (

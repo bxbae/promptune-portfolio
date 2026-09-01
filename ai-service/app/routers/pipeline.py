@@ -1,9 +1,8 @@
 """AI 서비스 라우터 — 각 파이프라인 단계를 엔드포인트로 노출."""
 
-import os
-
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from app.services.validation.validator import validate_response
+from app.services.validation.evidence_validator import validate_evidence_identity
 from app.schemas.models import (
     DiagnoseRequest,
     DiagnoseResponse,
@@ -28,87 +27,20 @@ from app.schemas.models import (
     ImprovePromptRequest,
     ImprovePromptResponse,
 )
-from app.services import diagnose_mock, pipeline_mock, prompt_rule
+
 from app.services.retrieval.ml_router import classify_ml_retrieval_route
 from app.services.retrieval.retrieval_orchestrator import execute_retrieval
-from app.services.retrieval import document_indexer
+from app.services.retrieval import document_indexer, rag_retriever
 
-USE_REAL_TITLE_SUMMARY = (
-    os.getenv(
-        "USE_REAL_TITLE_SUMMARY",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
+from app.services import (
+    diagnose_real,
+    generate_hcx,
+    improve_hcx,
+    prompt_rule,
+    safety_rule,
+    suggest_hcx,
+    title_summary_hcx,
 )
-
-if USE_REAL_TITLE_SUMMARY:
-    from app.services import summarize_hcx
-
-USE_REAL_DIAGNOSIS = (
-    os.getenv(
-        "USE_REAL_DIAGNOSIS",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-USE_REAL_SUGGESTION = (
-    os.getenv(
-        "USE_REAL_SUGGESTION",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-
-USE_REAL_RETRIEVAL = (
-    os.getenv(
-        "USE_REAL_RETRIEVAL",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-USE_REAL_VALIDATION = (
-    os.getenv(
-        "USE_REAL_VALIDATION",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-USE_REAL_GENERATION = (
-    os.getenv(
-        "USE_REAL_GENERATION",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-USE_REAL_IMPROVEMENT = (
-    os.getenv(
-        "USE_REAL_IMPROVEMENT",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
-
-if USE_REAL_GENERATION:
-    from app.services import generate_hcx
-
-
-if USE_REAL_DIAGNOSIS:
-    from app.services import diagnose_real
-
-if USE_REAL_SUGGESTION:
-    from app.services import suggest_hcx
-
-if USE_REAL_RETRIEVAL:
-    from app.services.retrieval import rag_retriever
-
-if USE_REAL_IMPROVEMENT:
-    from app.services import improve_hcx
-
 
 router = APIRouter()
 
@@ -120,11 +52,7 @@ router = APIRouter()
 )
 def diagnose(req: DiagnoseRequest):
     """8요소 누락 + 오탈자 + 업무유형 판정."""
-
-    if USE_REAL_DIAGNOSIS:
-        return diagnose_real.diagnose(req)
-
-    return diagnose_mock.diagnose(req)
+    return diagnose_real.diagnose(req)
 
 @router.post(
     "/prompt-rule",
@@ -142,10 +70,7 @@ def apply_prompt_rule(req: PromptRuleRequest):
 )
 def improve_prompt(req: ImprovePromptRequest):
     """Phase 2-C: Prompt Rule을 반영해 개선 프롬프트를 생성."""
-    if USE_REAL_IMPROVEMENT:
-        return improve_hcx.improve(req)
-
-    return pipeline_mock.improve_prompt(req)
+    return improve_hcx.improve(req)
 
 @router.post(
     "/suggest",
@@ -153,10 +78,7 @@ def improve_prompt(req: ImprovePromptRequest):
     tags=["7.추천생성"],
 )
 def suggest(req: SuggestRequest):
-    if USE_REAL_SUGGESTION:
-        return suggest_hcx.suggest(req)
-
-    return pipeline_mock.suggest(req)
+    return suggest_hcx.suggest(req)
 
 
 @router.post(
@@ -165,7 +87,7 @@ def suggest(req: SuggestRequest):
     tags=["8.안전검사"],
 )
 def safety_check(req: SafetyRequest):
-    return pipeline_mock.safety_check(req)
+    return safety_rule.safety_check(req)
 
 
 
@@ -205,10 +127,7 @@ def retrieval_execute(req: RetrievalExecuteRequest):
     tags=["13.내부검색"],
 )
 def retrieve(req: RetrieveRequest):
-    if USE_REAL_RETRIEVAL:
-        return rag_retriever.retrieve(req)
-
-    return pipeline_mock.retrieve(req)
+    return rag_retriever.retrieve(req)
 
 @router.post(
     "/generate",
@@ -219,29 +138,18 @@ def generate(req: GenerateRequest):
     web_results = [item.model_dump() for item in req.web_results]
     used_web_search = bool(web_results)
 
-    if USE_REAL_GENERATION:
-        # 2026-08-25: 동시에 여러 요청이 겹치면 HCX_MODEL_LOCK 대기열에 밀려서
-        # 몇 분씩 조용히 걸리다 nginx 타임아웃(5분)에야 애매하게 실패하던 문제가
-        # 있었음. hcx_lock이 제한시간(120초) 안에 못 얻으면 HcxBusyError를 던지는데,
-        # 그걸 여기서 명확한 503으로 바꿔서 사용자가 훨씬 빨리 "지금 바쁘다"는
-        # 응답을 받도록 함.
-        from app.services.hcx_runtime import HcxBusyError
+    # 동시에 여러 요청이 겹쳐 HCX lock을 제한시간 안에 얻지 못하면
+    # 명확한 503으로 반환한다.
+    from app.services.hcx_runtime import HcxBusyError
 
-        try:
-            return generate_hcx.generate(
-                req,
-                web_results=web_results,
-                used_web_search=used_web_search,
-            )
-        except HcxBusyError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    return pipeline_mock.generate(
-        req,
-        web_results=web_results,
-        used_web_search=used_web_search,
-    )
-
+    try:
+        return generate_hcx.generate(
+            req,
+            web_results=web_results,
+            used_web_search=used_web_search,
+        )
+    except HcxBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @router.post(
     "/validate",
@@ -249,24 +157,57 @@ def generate(req: GenerateRequest):
     tags=["15.최종 검증"],
 )
 def validate(req: ValidateRequest):
-    # semantic validator는 BGE-M3를 lazy loading하고 프로세스 내에서 재사용한다.
-    # mock 모드에서는 불필요한 BGE-M3 로딩과 메모리 사용을 피하기 위해
-    # USE_REAL_VALIDATION으로 게이트하고 pipeline_mock.validate()를 사용한다.
-    if not USE_REAL_VALIDATION:
-        return pipeline_mock.validate(req)
 
     result = validate_response(
         original=req.original,
         generated=req.generated,
     )
 
+    evidence_issues = validate_evidence_identity(
+        req.generated,
+        documents=[
+            item.model_dump()
+            for item in req.documents
+        ],
+        web_results=[
+            item.model_dump()
+            for item in req.web_results
+        ],
+    )
+
+    issues = [
+        *result.issues,
+        *evidence_issues,
+    ]
+
+    facts_preserved = (
+        result.facts_preserved
+        and not evidence_issues
+    )
+
+    passed = (
+        result.passed
+        and not evidence_issues
+    )
+
+    print(
+        f"[Validate] passed={passed!r} "
+        f"rule_ok={result.rule_ok!r} "
+        f"semantic_ok={result.semantic_ok!r} "
+        f"semantic_score={result.semantic_score!r} "
+        f"facts_preserved={facts_preserved!r} "
+        f"issues={issues!r} "
+        f"original={req.original[:300]!r} "
+        f"generated={req.generated[:300]!r}"
+    )
+
     return ValidateResponse(
-        passed=result.passed,
+        passed=passed,
         rule_ok=result.rule_ok,
         semantic_ok=result.semantic_ok,
         semantic_score=result.semantic_score,
-        facts_preserved=result.facts_preserved,
-        issues=result.issues,
+        facts_preserved=facts_preserved,
+        issues=issues,
     )
 
 
@@ -276,13 +217,8 @@ def validate(req: ValidateRequest):
     tags=["대화 제목 요약"],
 )
 def summarize_title(req: SummarizeTitleRequest):
-    """대화의 첫 프롬프트를 짧은 제목으로 요약."""
-    if USE_REAL_TITLE_SUMMARY:
-        return summarize_hcx.summarize_title(req)
-
-    # mock: 앞부분 자르기 (모델 없이 빠르게 테스트할 때 사용)
-    title = req.text[:15].strip()
-    return SummarizeTitleResponse(title=title)
+    """Generate a short conversation title using the shared HCX runtime."""
+    return title_summary_hcx.summarize(req)
 
 @router.post(
     "/index-document",

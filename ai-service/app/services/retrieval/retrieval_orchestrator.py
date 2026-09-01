@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+from app.services.action.action_resolver import resolve_action
+
 import re
 
 from app.schemas.models import (
@@ -9,26 +10,23 @@ from app.schemas.models import (
     RetrieveRequest,
     WebSearchResult,
 )
-from app.services import pipeline_mock
-from app.services.retrieval.ml_router import classify_ml_retrieval_route
+
+from app.services.retrieval.ml_router import (
+    classify_ml_retrieval_route,
+    resolve_strong_retrieval_route,
+)
 from app.services.retrieval.tavily_search import is_recency_query, search_web
 from app.services.retrieval.conversation_context import resolve_conversation_retrieval
 from app.services.retrieval.date_resolver import resolve_relative_dates
 from app.services.retrieval.search_query_cleanup import build_search_query
-
-# app/routers/pipeline.py의 USE_REAL_RETRIEVAL과 동일한 폴백 규칙.
-# (거길 직접 import하면 순환참조라 동일 로직을 복제함)
-USE_REAL_RETRIEVAL = (
-    os.getenv(
-        "USE_REAL_RETRIEVAL",
-        os.getenv("USE_REAL_MODELS", "false"),
-    ).lower()
-    == "true"
-)
+from app.services.retrieval.search_plan import build_search_plan
+from app.services.retrieval.evidence_selector import select_web_evidence
 
 from app.services.retrieval.rag_retriever import (
     retrieve,
     retrieve_document_overview,
+    retrieve_document_catalog,
+    find_metadata_document_ids,
 )
 
 
@@ -47,6 +45,12 @@ _OVERVIEW_MARKERS = (
     "요약해 줘",
     "읽어줘",
     "읽어 줘",
+    "불러와줘",
+    "불러와 줘",
+    "불러줘",
+    "불러 줘",
+    "열어줘",
+    "열어 줘",
     "핵심 내용",
     "핵심내용",
     "각 항목",
@@ -111,6 +115,141 @@ def _clean_document_followup_query(query: str) -> str:
     return text or query
 
 
+_EXTERNAL_COMPARISON_MARKERS = (
+    "비교해",
+    "비교해줘",
+    "비교해서",
+    "맞는지",
+    "맞아?",
+    "맞나요",
+    "검증해",
+    "검증해줘",
+    "확인해",
+    "확인해줘",
+    "검토해",
+    "검토해줘",
+)
+
+_EXTERNAL_REFERENCE_MARKERS = (
+    "현재",
+    "지금",
+    "최근",
+    "최신",
+    "오늘",
+    "현행",
+    "법률",
+    "법",
+    "법규",
+    "노동법",
+    "근로기준법",
+    "정부 기준",
+    "공식 기준",
+    "시장",
+    "시장가",
+    "시장 가격",
+    "시세",
+    "환율",
+    "주가",
+    "최신 자료",
+    "외부 자료",
+    "웹",
+    "인터넷",
+    "뉴스",
+    "실시간",
+)
+
+
+def _should_auto_use_web_with_internal(
+    query: str,
+    document_ids: list[int],
+) -> bool:
+    """
+    확정된 내부/첨부 문서를 외부의 현재·공식 사실과
+    비교/검증하는 요청일 때만 Web 검색을 함께 실행한다.
+
+    단순 문서 요약/질의는 Web을 호출하지 않는다.
+    """
+    if not document_ids:
+        return False
+
+    text = str(query or "").strip().lower()
+
+    if not text:
+        return False
+
+    has_comparison = any(
+        marker in text
+        for marker in _EXTERNAL_COMPARISON_MARKERS
+    )
+
+    has_external_reference = any(
+        marker in text
+        for marker in _EXTERNAL_REFERENCE_MARKERS
+    )
+
+    return has_comparison and has_external_reference
+
+
+
+_DOCUMENT_CATALOG_PHRASES = (
+    "내부문서에 뭐",
+    "내부 문서에 뭐",
+    "내부문서에는 뭐",
+    "내부 문서에는 뭐",
+    "내부문서 무슨 파일",
+    "내부 문서 무슨 파일",
+    "내부문서에는 무슨 파일",
+    "내부 문서에는 무슨 파일",
+    "사내문서에 뭐",
+    "사내 문서에 뭐",
+    "문서함에 뭐",
+    "문서함에는 뭐",
+)
+
+
+def _is_document_catalog_query(
+    query: str,
+) -> bool:
+    text = " ".join(
+        str(query or "").lower().split()
+    )
+
+    compact = "".join(
+        text.split()
+    )
+
+    if any(
+        "".join(phrase.split()) in compact
+        for phrase in _DOCUMENT_CATALOG_PHRASES
+    ):
+        return True
+
+    has_internal_scope = any(
+        marker in compact
+        for marker in (
+            "내부문서",
+            "사내문서",
+            "문서함",
+        )
+    )
+
+    has_catalog_intent = any(
+        marker in compact
+        for marker in (
+            "뭐있",
+            "무슨파일",
+            "목록",
+            "리스트",
+            "어떤문서",
+        )
+    )
+
+    return (
+        has_internal_scope
+        and has_catalog_intent
+    )
+
+
 def execute_retrieval(
     req: RetrievalExecuteRequest,
 ) -> RetrievalExecuteResponse:
@@ -133,11 +272,36 @@ def execute_retrieval(
             history=req.history,
         )
         effective_query = conversation.query
-        route = (
-            conversation.route_override
-            if conversation.route_override is not None
-            else classify_ml_retrieval_route(effective_query)
-        )
+        if conversation.route_override is not None:
+            route = conversation.route_override
+            action_plan = None
+        else:
+            action_plan = resolve_action(
+                effective_query,
+                req.routing_user_context,
+            )
+
+            # 명시적인 내부 문서 범위, 실시간 사실, 외부 entity/profile 등
+            # source가 확실한 deterministic signal은 ML Action보다 우선한다.
+            strong_route = resolve_strong_retrieval_route(
+                action_plan.routing_query
+            )
+
+            if strong_route is not None:
+                route = strong_route
+            elif action_plan.retrieval_route:
+                route = action_plan.retrieval_route
+            else:
+                route = "no_retrieval"
+
+            print(
+                "[Action] "
+                f"action={action_plan.action.value!r} "
+                f"confidence={action_plan.confidence:.3f} "
+                f"sources={action_plan.sources!r} "
+                f"reason={action_plan.reason!r} "
+                f"routing_query={action_plan.routing_query!r}"
+            )
 
     print(f"[Retrieval] route={route!r} effective_query={effective_query!r}")
 
@@ -149,80 +313,140 @@ def execute_retrieval(
 
     # 1. 내부문서 검색
     if route == "internal_rag":
-        # 실제 첨부/내부문서를 요청했는데 retrieval flag가 꺼져 있으면 mock 문서로
-        # 조용히 대체하면 안 된다. 사용자가 올린 파일을 못 읽은 사실을 숨기는 대신
-        # 설정 오류를 즉시 드러내야 잘못된 문서 답변을 원천 차단할 수 있다.
-        if not USE_REAL_RETRIEVAL:
-            raise ValueError(
-                "내부 문서 분석에는 USE_REAL_RETRIEVAL=true가 필요합니다."
-            )
-
         if req.owner_user_id is None:
             raise ValueError(
                 "internal_rag 검색에는 owner_user_id가 필요합니다."
             )
 
-        if (
-            document_ids
-            and (
+        if document_ids:
+            # 이미 Backend가 실제 문서 ID를 확정해서 보냈다면
+            # catalog/metadata discovery보다 이 ID가 가장 강한 source of truth다.
+            if (
                 _is_document_overview_query(req.query)
                 or _is_document_transform_query(req.query)
-            )
-            and USE_REAL_RETRIEVAL
-        ):
-            # "이거 무슨 내용이야?" / 전체 요약은 semantic Top-1이 아니라
-            # document chunk를 원래 순서대로 읽는다.
-            result = retrieve_document_overview(
+            ):
+                result = retrieve_document_overview(
+                    owner_user_id=req.owner_user_id,
+                    document_ids=document_ids,
+                )
+            else:
+                retrieve_req = RetrieveRequest(
+                    query=effective_query,
+                    owner_user_id=req.owner_user_id,
+                    top_k=req.top_k,
+                    document_ids=document_ids,
+                )
+
+                result = retrieve(
+                    retrieve_req
+                )
+
+        elif _is_document_catalog_query(req.query):
+            # "내부문서에는 무슨 파일이 있어?"는 chunk 검색이 아니라
+            # 접근 가능한 documents metadata 목록을 조회한다.
+            result = retrieve_document_catalog(
                 owner_user_id=req.owner_user_id,
-                document_ids=document_ids,
             )
+
         else:
-            retrieve_req = RetrieveRequest(
-                query=effective_query,
+            # 명시적으로 선택된 document_id가 없으면 title/type/description을
+            # 사용해 관련 내부문서 후보를 먼저 찾는다.
+            metadata_document_ids = find_metadata_document_ids(
                 owner_user_id=req.owner_user_id,
-                top_k=req.top_k,
-                document_ids=document_ids,
+                query=effective_query,
+                limit=5,
             )
 
-            result = (
-                retrieve(retrieve_req)
-                if USE_REAL_RETRIEVAL
-                else pipeline_mock.retrieve(retrieve_req)
-            )
+            if metadata_document_ids:
+                # 문서 자체가 특정된 경우에는 semantic Top-K 한 조각보다
+                # 해당 문서의 실제 내용을 순서대로 읽는 편이 안전하다.
+                result = retrieve_document_overview(
+                    owner_user_id=req.owner_user_id,
+                    document_ids=metadata_document_ids,
+                )
+            else:
+                # metadata에서도 특정 문서를 찾지 못한 경우에만
+                # 기존 BGE-M3 semantic retrieval로 fallback한다.
+                retrieve_req = RetrieveRequest(
+                    query=effective_query,
+                    owner_user_id=req.owner_user_id,
+                    top_k=req.top_k,
+                    document_ids=[],
+                )
 
-            if document_ids and not USE_REAL_RETRIEVAL:
-                result.documents = [
-                    doc
-                    for doc in result.documents
-                    if doc.document_id in document_ids
-                ]
+                result = retrieve(
+                    retrieve_req
+                )
 
         documents = result.documents
         used_internal_rag = bool(documents)
 
     # 2. 웹 / 외부·실시간 검색
-    elif route in {"web_search", "external_or_realtime"}:
+    # explicit use_web_search는 internal_rag와 동시에 실행될 수 있다.
+    # 즉 특정 첨부문서를 읽으면서 최신 Web 근거를 함께 가져올 수 있다.
+    should_use_web = (
+        bool(req.use_web_search)
+        or route in {"web_search", "external_or_realtime"}
+        or _should_auto_use_web_with_internal(
+            req.query,
+            document_ids,
+        )
+    )
+
+    if should_use_web:
         # 2026-08-26: "최근"/"최신" 같은 시점 표현은 search_query_cleanup.py의
         # 불용구 제거(패치 13, 예: "최근 골 소식과 관련해서" 전체를 stock
         # phrase로 지움) 이후에는 검색어에서 이미 사라져 있을 수 있다. 그래서
         # "최근 소식은 일주일 이내 기사로 한정" 판정은 정제 전 원문
         # effective_query에 대해 먼저 하고, 그 결과(time_range)만 정제된
         # 검색어와 함께 넘긴다.
-        recent_only = is_recency_query(effective_query)
-        time_range = "week" if recent_only else None
+        search_plan = build_search_plan(
+            effective_query
+        )
+
+        recent_only = is_recency_query(
+            effective_query
+        )
+
+        if search_plan.freshness == "DAY":
+            time_range = "day"
+        elif (
+            search_plan.freshness == "WEEK"
+            or recent_only
+        ):
+            time_range = "week"
+        else:
+            time_range = None
 
         search_query = resolve_relative_dates(
             build_search_query(effective_query)
         )
 
-        # 내부 RAG top_k와 Web 검색 결과 수를 분리한다.
-        # 내부문서는 4개 chunk까지 사용할 수 있지만 Web은 최대 3건만 전달한다.
-        web_top_k = min(max(int(req.top_k), 1), 3)
+        # Tavily에서는 후보를 조금 넓게 가져온 뒤,
+        # Evidence Selector가 실제 generation에 전달할 최대 3건만 고른다.
+        final_web_top_k = min(
+            max(int(req.top_k), 1),
+            3,
+        )
+        candidate_web_top_k = max(
+            final_web_top_k,
+            5,
+        )
 
-        results = search_web(
+        raw_results = search_web(
             search_query,
-            max_results=web_top_k,
+            max_results=candidate_web_top_k,
             time_range=time_range,
+            search_intent=search_plan.intent,
+            entity=search_plan.entity,
+        )
+
+        results = select_web_evidence(
+            raw_results,
+            query=effective_query,
+            intent=search_plan.intent,
+            entity=search_plan.entity,
+            limit=final_web_top_k,
         )
 
         # 2026-08-26: "이강인 소속과 프로필" 질의가 검색어 정리(패치 13) 이후
@@ -239,8 +463,11 @@ def execute_retrieval(
         # 바로 원인을 좁힐 수 있게 한다 - 동작에는 영향 없음(순수 로깅).
         print(
             f"[Retrieval] route={route!r} search_query={search_query!r} "
+            f"search_intent={search_plan.intent!r} "
+            f"entity={search_plan.entity!r} "
             f"time_range={time_range!r} "
-            f"results={[(r.get('title'), r.get('url'), r.get('score')) for r in results]}"
+            f"raw_results={[(r.get('title'), r.get('url'), r.get('score')) for r in raw_results]} "
+            f"selected_results={[(r.get('title'), r.get('url'), r.get('score')) for r in results]}"
         )
 
         web_results = [
@@ -248,6 +475,9 @@ def execute_retrieval(
                 title=item.get("title", ""),
                 url=item.get("url", ""),
                 content=item.get("content", ""),
+                score=float(
+                    item.get("score") or 0.0
+                ),
             )
             for item in results
         ]

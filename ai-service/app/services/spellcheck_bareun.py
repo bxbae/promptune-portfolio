@@ -668,9 +668,10 @@ def check_spelling_hybrid(
             text
         )
 
-    except RuntimeError:
-        # Bareun 장애 / API Key 문제 발생 시
-        # 전체 진단을 실패시키지 않고 Rule만 반환
+    except (RuntimeError, OSError):
+        # Bareun API 오류, 네트워크 오류, timeout 등이 발생해도
+        # 프롬프트 전체 진단은 실패시키지 않는다.
+        # Rule Engine 결과만 사용해서 fail-open 한다.
         return _to_api_typos(
             rule_typos
         )

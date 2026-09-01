@@ -4,6 +4,8 @@
 -- 저장하는 영문 enum 문자열(fast/accurate, brief/detailed, keep/improve)이어야
 -- Prompt Rule(Phase 2-B) 등에서 값을 비교할 수 있다. 그런데 실제 DB에는 이 규칙을
 -- 벗어나는 값이 두 종류 존재해서 함께 정규화한다.
+--
+-- (순수 UPDATE/문자열 비교만 사용하므로 Oracle에서도 문법 변경 없이 그대로 동작한다.)
 
 -- 1) 온보딩 화면의 기존 오타: preserve="imporve" (올바른 값은 "improve").
 --    이 값으로 저장된 기존 행이 있다면 정정한다.

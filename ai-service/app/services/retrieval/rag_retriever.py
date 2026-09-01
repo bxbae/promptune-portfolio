@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from functools import lru_cache
 
 import numpy as np
-import psycopg
+import oracledb
 import torch
+
+# CLOB 컬럼(content 등)을 LOB 객체가 아니라 바로 str로 돌려받는다.
+# 안 켜두면 아래 코드 곳곳의 str(content or "") 같은 처리가 LOB 객체를 받아 깨진다.
+oracledb.defaults.fetch_lobs = False
 
 from app.schemas.models import Document, RetrieveRequest, RetrieveResponse
 from app.services.retrieval.retrieval_rule import apply_retrieval_rule
@@ -97,13 +102,19 @@ def vector_literal(vector: np.ndarray) -> str:
 
 
 def get_connection():
-    return psycopg.connect(
-        host=os.getenv("DB_HOST", "db"),
-        port=int(os.getenv("DB_PORT", "5432")),
-        dbname=os.getenv("DB_NAME", "promptune"),
-        user=os.getenv("DB_USER", "promptune"),
+    # Oracle Cloud Free(Always Free Autonomous Database)용 지갑 없는 TLS 전용 접속.
+    # DB_DSN에는 OCI 콘솔 → Autonomous Database → Database connection에서
+    # 인증 방식을 "TLS"(mTLS 아님)로 선택한 뒤 복사한 접속 문자열을 그대로 넣는다.
+    # 예시(실제 host/service_name은 콘솔에서 확인한 값으로 교체):
+    #   (description=(retry_count=20)(retry_delay=3)(address=(protocol=tcps)
+    #   (port=1521)(host=adb.ap-chuncheon-1.oraclecloud.com))(connect_data=
+    #   (service_name=xxxxxxxxxxxxx_promptune_medium.adb.oraclecloud.com))
+    #   (security=(ssl_server_dn_match=yes)))
+    return oracledb.connect(
+        user=os.getenv("DB_USER", "ADMIN"),
         password=os.getenv("DB_PASSWORD", "promptune"),
-        connect_timeout=5,
+        dsn=os.getenv("DB_DSN", "REPLACE_WITH_OCI_CONSOLE_TLS_CONNECTION_STRING"),
+        tcp_connect_timeout=5,
     )
 
 
@@ -142,7 +153,13 @@ def retrieve_document_overview(
     if not ids:
         return RetrieveResponse(documents=[])
 
-    sql = """
+    # PostgreSQL의 "= ANY(%s::bigint[])" 배열 바인딩은 Oracle에 없으므로,
+    # ids가 최대 20개로 제한돼 있는 걸 이용해 IN (:doc_id_0, :doc_id_1, ...)
+    # 형태로 개별 바인드 변수를 만들어 펼친다.
+    id_binds = {f"doc_id_{i}": doc_id for i, doc_id in enumerate(ids)}
+    id_placeholders = ", ".join(f":{key}" for key in id_binds)
+
+    sql = f"""
 SELECT
     d.id AS document_id,
     dc.id AS chunk_id,
@@ -154,8 +171,8 @@ SELECT
 FROM documents d
 JOIN document_chunks dc
     ON dc.document_id = d.id
-WHERE d.owner_user_id = %s
-  AND d.id = ANY(%s::bigint[])
+WHERE d.owner_user_id = :owner_user_id
+  AND d.id IN ({id_placeholders})
 ORDER BY d.id, dc.chunk_index
 """
 
@@ -163,7 +180,7 @@ ORDER BY d.id, dc.chunk_index
         with conn.cursor() as cur:
             cur.execute(
                 sql,
-                (owner_user_id, ids)
+                {"owner_user_id": owner_user_id, **id_binds},
             )
             rows = cur.fetchall()
 
@@ -272,10 +289,13 @@ def retrieve_scoped_lexical(
     if not ids:
         return RetrieveResponse(documents=[])
 
+    id_binds = {f"doc_id_{i}": doc_id for i, doc_id in enumerate(ids)}
+    id_placeholders = ", ".join(f":{key}" for key in id_binds)
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     d.id AS document_id,
                     dc.id AS chunk_id,
@@ -287,11 +307,11 @@ def retrieve_scoped_lexical(
                 FROM documents d
                 JOIN document_chunks dc
                   ON dc.document_id = d.id
-                WHERE d.owner_user_id = %s
-                  AND d.id = ANY(%s::bigint[])
+                WHERE d.owner_user_id = :owner_user_id
+                  AND d.id IN ({id_placeholders})
                 ORDER BY d.id, dc.chunk_index
                 """,
-                (owner_user_id, ids),
+                {"owner_user_id": owner_user_id, **id_binds},
             )
             rows = cur.fetchall()
 
@@ -334,6 +354,208 @@ def retrieve_scoped_lexical(
     return RetrieveResponse(documents=documents)
 
 
+
+_INTERNAL_QUERY_STOP_WORDS = {
+    "우리회사",
+    "우리",
+    "회사",
+    "사내",
+    "내부",
+    "내부문서",
+    "문서함",
+    "업로드한",
+    "있는",
+    "있어",
+    "있나요",
+    "알려줘",
+    "알려주세요",
+    "보여줘",
+    "찾아줘",
+    "해줘",
+}
+
+
+def _nfc_text(value) -> str:
+    return unicodedata.normalize(
+        "NFC",
+        str(value or ""),
+    )
+
+
+def _metadata_query_tokens(query: str) -> list[str]:
+    tokens = re.findall(
+        r"[가-힣A-Za-z0-9_]{2,}",
+        _nfc_text(query).lower(),
+    )
+
+    return [
+        token
+        for token in tokens
+        if token not in _INTERNAL_QUERY_STOP_WORDS
+    ]
+
+
+def retrieve_document_catalog(
+    owner_user_id: int,
+    *,
+    limit: int = 50,
+) -> RetrieveResponse:
+    """
+    '내부문서에 뭐 있어?' 같은 catalog 요청.
+
+    chunk embedding 검색을 하지 않고 사용자가 접근 가능한 documents
+    metadata를 직접 조회한다.
+    """
+    # PostgreSQL의 LIMIT %s → Oracle의 FETCH FIRST :n ROWS ONLY.
+    sql = """
+SELECT
+    d.id,
+    d.title,
+    d.document_type,
+    d.description
+FROM documents d
+WHERE d.owner_user_id = :owner_user_id
+ORDER BY d.id DESC
+FETCH FIRST :result_limit ROWS ONLY
+"""
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "owner_user_id": owner_user_id,
+                    "result_limit": max(1, min(int(limit), 100)),
+                },
+            )
+            rows = cur.fetchall()
+
+    documents = []
+
+    for (
+        document_id,
+        title,
+        document_type,
+        description,
+    ) in rows:
+        metadata_text = (
+            f"파일명: {title}\n"
+            f"문서 유형: {document_type or 'OTHER'}"
+        )
+
+        if description:
+            metadata_text += (
+                f"\n설명: {description}"
+            )
+
+        documents.append(
+            Document(
+                document_id=int(document_id),
+                chunk_id=None,
+                chunk_index=None,
+                title=str(title or ""),
+                document_type=(
+                    document_type or "OTHER"
+                ),
+                description=description,
+                content=metadata_text,
+                score=1.0,
+            )
+        )
+
+    return RetrieveResponse(
+        documents=documents
+    )
+
+
+def find_metadata_document_ids(
+    owner_user_id: int,
+    query: str,
+    *,
+    limit: int = 5,
+) -> list[int]:
+    """
+    내부문서 lookup의 1단계.
+
+    title / description / document_type metadata를 이용해 문서 후보를
+    먼저 고른다. 이후 실제 내용 retrieval은 해당 document_id 안에서
+    수행한다.
+    """
+    tokens = _metadata_query_tokens(query)
+
+    if not tokens:
+        return []
+
+    sql = """
+SELECT
+    d.id,
+    d.title,
+    d.document_type,
+    d.description
+FROM documents d
+WHERE d.owner_user_id = :owner_user_id
+ORDER BY d.id DESC
+"""
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {"owner_user_id": owner_user_id},
+            )
+            rows = cur.fetchall()
+
+    scored = []
+
+    for (
+        document_id,
+        title,
+        document_type,
+        description,
+    ) in rows:
+        title_text = _nfc_text(title).lower()
+        description_text = _nfc_text(
+            description
+        ).lower()
+        type_text = _nfc_text(
+            document_type
+        ).lower()
+
+        score = 0.0
+
+        for token in tokens:
+            if token in title_text:
+                score += 4.0
+
+            if token in description_text:
+                score += 2.0
+
+            if token in type_text:
+                score += 1.5
+
+        if score > 0:
+            scored.append(
+                (
+                    score,
+                    int(document_id),
+                )
+            )
+
+    scored.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        ),
+        reverse=True,
+    )
+
+    return [
+        document_id
+        for _, document_id in scored[
+            : max(1, min(limit, 10))
+        ]
+    ]
+
 def retrieve(req: RetrieveRequest) -> RetrieveResponse:
     top_k = max(1, min(int(req.top_k), 10))
     document_ids = _normalized_document_ids(req.document_ids)
@@ -354,14 +576,21 @@ def retrieve(req: RetrieveRequest) -> RetrieveResponse:
             )
         raise
 
+    # PostgreSQL/pgvector의 "<=>" 코사인 거리 연산자와 LIMIT/ANY(...)는 Oracle에
+    # 없으므로: <=> → VECTOR_DISTANCE(..., COSINE), ::vector 캐스트 → TO_VECTOR(...),
+    # LIMIT → FETCH FIRST ... ROWS ONLY, ANY(...) → IN (...)으로 바꾼다.
+    binds: dict[str, object] = {
+        "owner_user_id": req.owner_user_id,
+        "query_vector": vector,
+        "candidate_k": candidate_k,
+    }
+
     document_filter = ""
-    params: list[object] = [vector, req.owner_user_id]
-
     if document_ids:
-        document_filter = " AND d.id = ANY(%s::bigint[])"
-        params.append(document_ids)
-
-    params.extend([vector, candidate_k])
+        id_binds = {f"doc_id_{i}": doc_id for i, doc_id in enumerate(document_ids)}
+        id_placeholders = ", ".join(f":{key}" for key in id_binds)
+        document_filter = f" AND d.id IN ({id_placeholders})"
+        binds.update(id_binds)
 
     sql = f"""
 SELECT
@@ -372,20 +601,20 @@ SELECT
     d.document_type,
     d.description,
     dc.content,
-    1 - (dc.embedding <=> %s::vector) AS score
+    1 - VECTOR_DISTANCE(dc.embedding, TO_VECTOR(:query_vector), COSINE) AS score
 FROM document_chunks dc
 JOIN documents d
     ON d.id = dc.document_id
-WHERE d.owner_user_id = %s
+WHERE d.owner_user_id = :owner_user_id
   {document_filter}
   AND dc.embedding IS NOT NULL
-ORDER BY dc.embedding <=> %s::vector
-LIMIT %s
+ORDER BY VECTOR_DISTANCE(dc.embedding, TO_VECTOR(:query_vector), COSINE)
+FETCH FIRST :candidate_k ROWS ONLY
 """
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, tuple(params))
+            cur.execute(sql, binds)
             rows = cur.fetchall()
 
     documents = [

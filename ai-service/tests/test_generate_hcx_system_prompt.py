@@ -193,6 +193,32 @@ class BuildSystemPromptDateGroundingTest(unittest.TestCase):
         self.assertIn("오늘 날짜는", prompt)
         self.assertNotIn("2024년 2월 기준", prompt)
 
+    def test_includes_format_compliance_rule(self):
+        prompt = self._prompt(None)
+
+        self.assertIn(
+            "사용자가 표, 목록, 문단, JSON 등 출력 형식을 명시하면",
+            prompt,
+        )
+
+
+    def test_includes_length_compliance_rule(self):
+        prompt = self._prompt(None)
+
+        self.assertIn(
+            "사용자가 글자 수, 문장 수, 줄 수, 항목 수 등 분량을 명시하면",
+            prompt,
+        )
+
+
+    def test_includes_constraint_compliance_rule(self):
+        prompt = self._prompt(None)
+
+        self.assertIn(
+            "사용자가 '반드시', '제외', '포함하지 마', '하지 마' 등 명시적인 제약 조건을 주면",
+            prompt,
+        )   
+
 
 if __name__ == "__main__":
     unittest.main()

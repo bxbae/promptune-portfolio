@@ -1,6 +1,9 @@
 import unittest
 
-from app.services.retrieval.ml_router import classify_ml_retrieval_route
+from app.services.retrieval.ml_router import (
+    classify_ml_retrieval_route,
+    resolve_strong_retrieval_route,
+)
 
 
 class ClassifyMlRetrievalRouteTest(unittest.TestCase):
@@ -175,6 +178,59 @@ class ClassifyMlRetrievalRouteTest(unittest.TestCase):
                 self.assertEqual(
                     classify_ml_retrieval_route(query), "external_or_realtime"
                 )
+
+
+class ResolveStrongRetrievalRouteTest(unittest.TestCase):
+    """
+    2026-08-31: PR #207(action-aware retrieval 리팩터) 이후, 실제 운영 라우팅
+    경로(retrieval_orchestrator.execute_retrieval)는 classify_ml_retrieval_route가
+    아니라 resolve_action(ActionClassifier) + resolve_strong_retrieval_route만
+    거친다. 그런데 "OO에 대해 알려줘/소개해줘/설명해줘" 패턴을 결정적으로
+    external_or_realtime으로 보내던 _is_external_subject_summary_query 규칙이
+    resolve_strong_retrieval_route로 옮겨지지 않아서, ActionClassifier가 낮은
+    confidence를 내는 질의(예: "고마워!"처럼 학습 데이터에 거의 없는 문구가 앞에
+    붙은 경우)에서 검색이 아예 스킵되는 회귀가 발생했다. 도커 로그로 재현 확인:
+    [Action] action='WEB_FACT' confidence=0.239 sources=() reason=
+    'low_confidence_needs_strong_signal' routing_query='고마워! 리센느 걸그룹에
+    대해 알려줘.' / [Retrieval] route='no_retrieval' - 결과적으로 HCX가 리센느
+    멤버 구성과 존재하지 않는 NFT 사업 모델을 지어내는 답을 내놓았고, sources가
+    비어 있어 "출처 더보기"도 뜨지 않았다.
+    """
+
+    def test_greeting_prefixed_about_query_routes_to_realtime_search(self):
+        # 실제 운영에서 재현된 질의 그대로 - ActionClassifier의 confidence와
+        # 무관하게 결정적으로 external_or_realtime이 나와야 한다.
+        self.assertEqual(
+            resolve_strong_retrieval_route(
+                "고마워! 리센느 걸그룹에 대해 알려줘."
+            ),
+            "external_or_realtime",
+        )
+
+    def test_external_subject_summary_query_is_a_strong_route_directly(self):
+        for query in (
+            "BTS에 대해 알려줘. 최근 이슈와 관련해",
+            "이순신 장군에 대해 설명해줘",
+            "리센느에 대하여 소개해줘",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(
+                    resolve_strong_retrieval_route(query),
+                    "external_or_realtime",
+                )
+
+    def test_self_referential_about_query_is_not_a_strong_route(self):
+        # "내 프로필에 대해 알려줘"까지 결정적으로 external_or_realtime으로
+        # 보내면 안 된다 - 이건 여전히 user_context/ML 판단에 맡긴다.
+        self.assertIsNone(
+            resolve_strong_retrieval_route("내 프로필에 대해 알려줘")
+        )
+
+    def test_internal_topic_about_query_is_not_a_strong_external_route(self):
+        self.assertEqual(
+            resolve_strong_retrieval_route("우리 회사 정책에 대해 알려줘"),
+            "internal_rag",
+        )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,8 @@ import fitz
 from docx import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from openpyxl import Workbook, load_workbook
+from pptx import Presentation
+from pptx.util import Pt
 
 
 def _safe_filename(title: str) -> str:
@@ -692,6 +694,38 @@ def _generate_xlsx(
     return buffer.getvalue()
 
 
+def _generate_pptx(title: str, content: str) -> bytes:
+    """최소 기능 버전: 제목 슬라이드 1장 + 본문을 문단 단위로 나눠 슬라이드에 배치.
+    (디자인 템플릿, 이미지, 차트 등은 범위 밖 - 추후 고도화 필요)"""
+    prs = Presentation()
+
+    # 제목 슬라이드
+    title_slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(title_slide_layout)
+    slide.shapes.title.text = title
+
+    # 본문 - 빈 줄 기준으로 문단을 나눠 슬라이드마다 하나씩
+    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+    content_layout = prs.slide_layouts[1]  # 제목 + 본문 레이아웃
+
+    for paragraph in paragraphs:
+        slide = prs.slides.add_slide(content_layout)
+        lines = paragraph.split("\n")
+        slide.shapes.title.text = lines[0][:60]  # 첫 줄을 슬라이드 제목으로
+
+        if len(lines) > 1:
+            body = slide.placeholders[1]
+            tf = body.text_frame
+            tf.text = lines[1]
+            for line in lines[2:]:
+                p = tf.add_paragraph()
+                p.text = line
+
+    buffer = BytesIO()
+    prs.save(buffer)
+    return buffer.getvalue()
+
+
 def _generate_markdown(
     title: str,
     content: str,
@@ -771,6 +805,13 @@ def generate_document(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+    if fmt == "pptx":
+        return (
+            _generate_pptx(title, content),
+            f"{safe_title}.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+
     if fmt == "md":
         return (
             _generate_markdown(
@@ -789,5 +830,5 @@ def generate_document(
         )
 
     raise ValueError(
-        "지원 형식은 docx, pdf, xlsx, md, txt입니다."
+        "지원 형식은 docx, pdf, xlsx, pptx, md, txt입니다."
     )

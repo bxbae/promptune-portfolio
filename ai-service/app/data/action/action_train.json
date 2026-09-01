@@ -1,0 +1,326 @@
+[
+  {
+    "text": "안녕",
+    "action": "CHAT"
+  },
+  {
+    "text": "안녕하세요",
+    "action": "CHAT"
+  },
+  {
+    "text": "오늘도 잘 부탁해",
+    "action": "CHAT"
+  },
+  {
+    "text": "반가워",
+    "action": "CHAT"
+  },
+  {
+    "text": "오랜만이야",
+    "action": "CHAT"
+  },
+  {
+    "text": "잘 지냈어?",
+    "action": "CHAT"
+  },
+  {
+    "text": "고마워",
+    "action": "CHAT"
+  },
+  {
+    "text": "수고했어",
+    "action": "CHAT"
+  },
+  {
+    "text": "좋은 아침",
+    "action": "CHAT"
+  },
+  {
+    "text": "잘 자",
+    "action": "CHAT"
+  },
+  {
+    "text": "뭐해?",
+    "action": "CHAT"
+  },
+  {
+    "text": "너 오늘 기분 어때?",
+    "action": "CHAT"
+  },
+  {
+    "text": "앞으로 나를 형님이라고 불러",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "나를 팀장님이라고 불러줘",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "다음부터 Becky라고 불러",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "내 프로젝트 이름은 레인보우야 기억해",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "이 프로젝트 이름은 Promptune으로 기억해줘",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "앞으로 답변은 짧게 해줘",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "내가 표를 좋아한다고 기억해",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "내 선호 언어는 한국어야 기억해줘",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "앞으로 코드 먼저 보여줘",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "이걸 기억해둬",
+    "action": "MEMORY_WRITE"
+  },
+  {
+    "text": "내 프로젝트 이름 뭐라고 했지?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "나를 뭐라고 부르기로 했지?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "전에 내가 말한 거 기억나?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "내가 선호하는 답변 방식 뭐였어?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "아까 내가 뭐라고 했지?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "내가 기억해달라고 한 내용 알려줘",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "내 선호사항 기억하고 있어?",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "전에 말한 프로젝트 이름 알려줘",
+    "action": "MEMORY_READ"
+  },
+  {
+    "text": "내 이력서 알려줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 경력 정리해줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 회사 어디였지?",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 직무가 뭐였지?",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 프로필 정리해줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 프로젝트 경력 알려줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 학력 알려줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "내 업무 경험 정리해줘",
+    "action": "USER_CONTEXT"
+  },
+  {
+    "text": "이 문장 자연스럽게 고쳐줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "영어로 번역해줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "이걸 세 줄로 요약해줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "보고서 문체로 바꿔줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "맞춤법만 고쳐줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "더 공손하게 수정해줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "아래 내용을 이메일 형식으로 바꿔줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "이 문장을 간단하게 줄여줘",
+    "action": "TEXT_TRANSFORM"
+  },
+  {
+    "text": "첨부한 문서 요약해줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "업로드한 파일에서 매출 찾아줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "회사 연차 규정 알려줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "사내 보고서 내용을 설명해줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "이 PDF에서 핵심 내용 찾아줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "첨부파일 기준으로 답해줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "우리 회사 출장 규정 알려줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "내부 문서에서 찾아줘",
+    "action": "INTERNAL_DOC"
+  },
+  {
+    "text": "리센느 누구야",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "침착맨 누구야",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "손흥민 프로필 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "오늘 원달러 환율 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "현재 삼성전자 주가 얼마야",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "오늘 서울 날씨 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "최근 OpenAI 뉴스 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "BTS 최근 이슈 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "어제 LG 트윈스 경기 결과 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "요즘 부동산 정책 뭐가 바뀌었어?",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "회사 규정이 현행법과 맞는지 비교해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "첨부한 보고서를 최신 자료와 비교해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "내부 정책과 현재 노동법을 비교해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "이 보고서 수치와 현재 시장 가격을 비교해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "사내 자료가 최신 정부 기준과 맞는지 검증해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "첨부 문서와 최근 뉴스 내용을 비교해줘",
+    "action": "MIXED_RESEARCH"
+  },
+  {
+    "text": "안녕이라는 단어의 어원이 뭐야",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "한국 인사말의 역사를 조사해줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "기억이라는 개념을 설명해줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "프로젝트 레인보우라는 회사가 실제로 있는지 찾아줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "손흥민 이력서 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "이강인 경력 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "박지성 학력 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "김연아 직무 경력 알려줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "내 이름으로 나온 최근 뉴스 찾아줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "김연아 경력 정리해줘",
+    "action": "WEB_FACT"
+  },
+  {
+    "text": "손흥민 업무 경력 알려줘",
+    "action": "WEB_FACT"
+  }
+]

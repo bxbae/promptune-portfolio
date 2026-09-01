@@ -123,6 +123,23 @@ class BuildSearchQueryTest(unittest.TestCase):
         )
         self.assertEqual(build_search_query(query), "침착맨")
 
+    def test_strips_context_and_constraint_variants_seen_in_production(self):
+        # 2026-08-31: 실제 운영 로그(chat/108)에서 재현된 사례. "최근 일주일
+        # 이전 기준으로"(CONTEXT)와 "전문용어는 꼭 포함해서"(CONSTRAINT의
+        # "전문용어는 빼고" 반대 표현) 둘 다 상투구 집합에 없어서 검색어가
+        # "이강인 소속과 프로필을 알려줘 최근 일주일 이전 기준으로 전문용어는
+        # 꼭 포함해서"로 오염됐고, Tavily가 완전히 무관한 결과(G-DRAGON,
+        # 감스트)를 반환해 HCX가 소속팀을 잘못 지어내는 결과로 이어졌다.
+        query = (
+            "이강인 소속과 프로필을 알려줘. 작성해줘. 나에게. 최근 일주일 "
+            "이전 기준으로. 9문단으로. 전문적으로. 전문용어는 꼭 포함해서. "
+            "첨부 샘플 참고해서"
+        )
+        self.assertEqual(
+            build_search_query(query),
+            "이강인 소속과 프로필을 알려줘",
+        )
+
     def test_strips_about_subject_particle_with_space_before_ask_verb(self):
         for query, expected in (
             ("BTS에 대해 알려줘. 최근 이슈와 관련해", "BTS 알려줘"),

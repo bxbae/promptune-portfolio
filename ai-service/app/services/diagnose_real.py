@@ -37,6 +37,7 @@ from app.services.diagnose_rules import (
     detect_task_type,
     detect_typos,
     needs_internal_docs,
+    should_force_missing_audience,
 )
 
 from app.services.spellcheck_bareun import check_spelling_hybrid
@@ -172,9 +173,27 @@ def _ensure_model_loaded() -> None:
         local_files_only=True,
     )
 
-    _model = AutoModelForSequenceClassification.from_pretrained(
+    # Load model.safetensors explicitly as real CPU tensors.
+    # This avoids parameters remaining on the meta device.
+    # The model is moved to the resolved device after state loading.
+    from transformers import AutoConfig
+    from safetensors.torch import load_file
+
+    config = AutoConfig.from_pretrained(
         MODEL_PATH,
         local_files_only=True,
+    )
+
+    _model = AutoModelForSequenceClassification.from_config(config)
+
+    state_dict = load_file(
+        str(MODEL_PATH / "model.safetensors"),
+        device="cpu",
+    )
+
+    _model.load_state_dict(
+        state_dict,
+        strict=True,
     )
 
     _model.to(_device)
@@ -259,6 +278,19 @@ def predict_missing(text: str) -> dict[str, int]:
 
     return missing
 
+def predict_missing_with_rules(text: str) -> dict[str, int]:
+    """
+    KcELECTRA의 8요소 누락 판정에
+    고신뢰 진단 규칙을 적용한 최종 missing 결과를 반환한다.
+    """
+
+    missing = predict_missing(text)
+    task_type = detect_task_type(text)
+
+    if should_force_missing_audience(text, task_type):
+        missing["AUDIENCE"] = 1
+
+    return missing
 
 def diagnose(req: DiagnoseRequest) -> DiagnoseResponse:
     """
@@ -272,9 +304,10 @@ def diagnose(req: DiagnoseRequest) -> DiagnoseResponse:
 
     text = req.text
 
-    missing = predict_missing(text)
+    missing = predict_missing_with_rules(text)
 
     task_type = detect_task_type(text)
+
     if USE_REAL_SPELLCHECK:
         typos = check_spelling_hybrid(text)
     else:

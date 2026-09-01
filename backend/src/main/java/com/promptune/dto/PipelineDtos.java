@@ -1,5 +1,6 @@
 package com.promptune.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
@@ -29,10 +30,16 @@ public class PipelineDtos {
         }
 
         // 7번 ai-service /suggest 응답
+        public record SuggestionAnchor(
+                        @JsonAlias("sentence_index") int sentenceIndex,
+                        @JsonAlias("char_offset") int charOffset) {
+        }
+
         public record SuggestionItem(
                         String element,
                         String primary,
-                        List<String> alternatives) {
+                        List<String> alternatives,
+                        SuggestionAnchor anchor) {
         }
 
         public record SuggestResult(

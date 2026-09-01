@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import re
+
 import logging
 
 import torch
 
 from app.schemas.models import ImprovePromptRequest, ImprovePromptResponse
 from app.services.hcx_runtime import hcx_lock, load_hcx_runtime
-
+from app.services.validation.rule_validator import extract_numbers
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,46 @@ def _required_placeholders(req: ImprovePromptRequest) -> list[str]:
         if element in _PLACEHOLDERS
     ]
 
+def _preserves_original_numbers(
+    req: ImprovePromptRequest,
+    output: str,
+) -> bool:
+    original_numbers = extract_numbers(req.text)
+    output_numbers = extract_numbers(output)
+
+    return original_numbers.issubset(output_numbers)
+
+_CONSTRAINT_MARKERS = (
+    "반드시",
+    "꼭",
+    "하지 마",
+    "하지마",
+    "제외",
+    "포함하지",
+    "금지",
+)
+
+
+def _preserves_explicit_constraints(
+    req: ImprovePromptRequest,
+    output: str,
+) -> bool:
+    clauses = re.split(r"[,\n.!?]+", req.text)
+
+    constraints = [
+        clause.strip()
+        for clause in clauses
+        if clause.strip()
+        and any(
+            marker in clause
+            for marker in _CONSTRAINT_MARKERS
+        )
+    ]
+
+    return all(
+        constraint in output
+        for constraint in constraints
+    )
 
 def _is_acceptable_output(
     req: ImprovePromptRequest,
@@ -163,10 +205,17 @@ def _is_acceptable_output(
     if _contains_meta_output(output):
         return False
 
-    return all(
+    if not all(
         placeholder in output
         for placeholder in _required_placeholders(req)
-    )
+    ):
+        return False
+
+    if not _preserves_original_numbers(req, output):
+        return False
+
+    return _preserves_explicit_constraints(req, output)
+
 
 
 def _build_fallback_prompt(req: ImprovePromptRequest) -> str:

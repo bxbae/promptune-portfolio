@@ -59,8 +59,7 @@ export default function AuthForm({ onSuccess }: { onSuccess: (name: string) => v
         <button className="social kakao" onClick={() => social("kakao")}>카카오로 계속</button>
         <button className="social naver" onClick={() => social("naver")}>네이버로 계속</button>
       </div>
-      {/* TODO: 실제 배포 시 MOCK 문구 제거 */}
-      <p className="auth-note">소셜 로그인은 각 제공자 키 설정 후 작동합니다 (docs/AUTH.md).</p>
+      {/* <p className="auth-note">소셜 로그인은 각 제공자 키 설정 후 작동합니다 (docs/AUTH.md).</p> */}
     </div>
   );
 }

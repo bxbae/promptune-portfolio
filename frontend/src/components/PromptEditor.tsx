@@ -1,8 +1,8 @@
 "use client";
-
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { analyze, execute, recordBehaviorAction, type AnalyzeResponse, improve, type ImproveResponse, type PlaceholderSuggestion } from "@/lib/api";
-import { uploadDocument, type DocumentItem } from "@/api/documents";
+import { uploadDocument, listDocuments, type DocumentItem, type DocType } from "@/api/documents";
+import type { ReceiverProfile } from "@/api/receiverProfiles";
 
 interface ElementUiMeta {
   label: string;
@@ -52,6 +52,49 @@ export interface DirectEdit {
   userFinal: string;
 }
 
+type TypoItem = {
+  span: string;
+  suggest: string;
+};
+
+type TypoRange = TypoItem & {
+  start: number;
+  end: number;
+};
+
+// diagnose 응답은 오탈자 문자열(span)만 주고 offset은 주지 않으므로
+// 현재 textarea의 원문에서 실제 위치를 결정한다. 같은 문자열이 여러 번 등장해도
+// 이미 사용한 범위와 겹치지 않는 다음 위치를 찾아 중복 밑줄을 방지한다.
+function buildTypoRanges(fullText: string, typos: TypoItem[]): TypoRange[] {
+  const ranges: TypoRange[] = [];
+
+  for (const typo of typos) {
+    const span = typo.span;
+    if (!span) continue;
+
+    let searchFrom = 0;
+
+    while (searchFrom <= fullText.length - span.length) {
+      const start = fullText.indexOf(span, searchFrom);
+      if (start < 0) break;
+
+      const end = start + span.length;
+      const overlaps = ranges.some(
+        (range) => start < range.end && end > range.start,
+      );
+
+      if (!overlaps) {
+        ranges.push({ ...typo, start, end });
+        break;
+      }
+
+      searchFrom = start + Math.max(span.length, 1);
+    }
+  }
+
+  return ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
 interface PromptEditorProps {
   onSubmit?: (
     displayText: string,
@@ -68,6 +111,8 @@ interface PromptEditorProps {
   // 이전 메시지를 인용해서 다음 프롬프트에 맥락으로 참고시킬 때 사용.
   quotedMessage?: { role: "user" | "assistant"; content: string } | null;
   onClearQuote?: () => void;
+  receiverProfiles?: ReceiverProfile[];
+  onReceiverProfileChange?: (profile: ReceiverProfile | null) => void;
 }
 
 type AttachmentState = {
@@ -85,8 +130,13 @@ export default function PromptEditor({
   chatSessionId,
   quotedMessage,
   onClearQuote,
+  receiverProfiles = [],
+  onReceiverProfileChange,
 }: PromptEditorProps = {}) {
   const [text, setText] = useState("");
+  const [selectedReceiverId, setSelectedReceiverId] = useState<number | null>(
+    null,
+  );
   const [resolved, setResolved] = useState<Set<string>>(new Set());
   const directEditsRef = useRef<DirectEdit[]>([]);
 
@@ -123,7 +173,33 @@ export default function PromptEditor({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const receiverCandidate =
+    receiverProfiles
+      .filter((profile) => profile.receiverName && text.includes(profile.receiverName))
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() -
+          new Date(a.updatedAt).getTime(),
+      )[0] ?? null;
+
+  useEffect(() => {
+    if (!text && selectedReceiverId !== null) {
+      setSelectedReceiverId(null);
+      onReceiverProfileChange?.(null);
+    }
+  }, [text, selectedReceiverId, onReceiverProfileChange]);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const inputWrapRef = useRef<HTMLDivElement>(null);
+  const anchorMarkerRef = useRef<HTMLSpanElement>(null);
+  // 방향키로 옵션을 넘길 때, 목록이 스크롤되어 있으면(카드 높이 초과) 선택된
+  // 옵션이 화면 밖으로 나가있을 수 있다. 그 옵션을 담고 있는 스크롤 컨테이너(.ai-suggestion-card)
+  // 자체에 ref를 걸어두고, optIdx/placeholderOptIdx가 바뀔 때마다 안의 .active 요소를
+  // scrollIntoView로 따라오게 한다.
+  const activeSuggestionCardRef = useRef<HTMLDivElement>(null);
+  const activePlaceholderCardRef = useRef<HTMLDivElement>(null);
+
+  const [anchorCardLeft, setAnchorCardLeft] = useState(0);
   const submittingRef = useRef(false);
   // 한글 (조합형 입력) 중 Enter로 오전송되는 것 방지 플래그.
   // macOS IME는 마지막 글자 확정 전에 keydown(Enter)이 먼저 발생할 수 있어서 조합이 끝났는지 여기서 직접 추적.
@@ -160,6 +236,11 @@ export default function PromptEditor({
     ) ?? null)
     : null;
 
+  const activeAnchorOffset =
+    activeSuggestion?.anchor != null
+      ? Math.max(0, Math.min(activeSuggestion.anchor.charOffset, text.length))
+      : null;
+
   const activeMeta = activeElement
     ? (ELEMENT_UI[activeElement] ?? {
       label: `${activeElement} 요소를 보완하면 좋아요`,
@@ -174,6 +255,48 @@ export default function PromptEditor({
     )
     : [];
 
+  const typoRanges = buildTypoRanges(
+    text,
+    analysisResult?.diagnose?.typos ?? [],
+  );
+
+  const syncAnchorCardLeft = useCallback(() => {
+    const wrap = inputWrapRef.current;
+    const marker = anchorMarkerRef.current;
+
+    if (!wrap || !marker || activeAnchorOffset === null) {
+      setAnchorCardLeft(0);
+      return;
+    }
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+
+    const cardWidth = Math.min(320, wrapRect.width);
+
+    const rawLeft = markerRect.left - wrapRect.left;
+
+    const maxLeft = Math.max(0, wrapRect.width - cardWidth);
+
+    setAnchorCardLeft(Math.max(0, Math.min(rawLeft, maxLeft)));
+  }, [activeAnchorOffset]);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(syncAnchorCardLeft);
+
+    const handleResize = () => {
+      syncAnchorCardLeft();
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [syncAnchorCardLeft, text, activeElement, compact]);
+
   // 다듬기 카드에서 텍스트에 등장하는 순서대로 정렬된 placeholder 목록
   const orderedPlaceholders: PlaceholderSuggestion[] = improveResult
     ? splitTextByPlaceholders(text, improveResult.placeholders)
@@ -185,6 +308,8 @@ export default function PromptEditor({
     : [];
 
   const scheduleAnalyze = useCallback((value: string) => {
+    // 입력이 연속으로 바뀌면 이전 debounce 타이머를 취소해
+    // 오래된 텍스트로 analyze 요청이 여러 번 발생하지 않게 한다.
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -193,6 +318,7 @@ export default function PromptEditor({
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
+      setAnalyzing(false);
     }
 
     setOptIdx(0);
@@ -206,10 +332,12 @@ export default function PromptEditor({
       setAnalyzing(false);
       setGate(null);
       setAnalysisResult(null);
+      setResolved(new Set());
       return;
     }
 
     timerRef.current = setTimeout(async () => {
+      timerRef.current = null;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
@@ -223,6 +351,29 @@ export default function PromptEditor({
 
         setGate(response.gate);
         setAnalysisResult(response);
+
+        const diagnose = response.diagnose;
+
+        if (diagnose) {
+          const missingEntries = Object.entries(diagnose.missing);
+
+          setResolved((prev) => {
+            const updated = new Set(prev);
+
+            for (const [element, missingValue] of missingEntries) {
+              if (missingValue === 1) {
+                // 최신 재진단에서 다시 부족하다고 판단되면
+                // 이전 resolved 상태를 제거해서 추천 대상으로 복구한다.
+                updated.delete(element);
+              } else {
+                // 최신 재진단에서 충족된 요소는 해결 상태로 유지한다.
+                updated.add(element);
+              }
+            }
+
+            return updated;
+          });
+        }
       } catch (error: unknown) {
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
@@ -270,6 +421,23 @@ export default function PromptEditor({
     };
   }, []);
 
+  // 방향키(↑↓)로 옵션을 넘길 때, 카드가 스크롤된 상태(옵션이 많아 maxHeight를 넘김)면
+  // 방금 선택된 옵션이 화면 밖에 있을 수 있다. .active로 표시된 옵션을 카드 안에서
+  // scrollIntoView로 따라오게 한다 (block:"nearest"라 이미 보이는 옵션이면 스크롤 안 함).
+  useEffect(() => {
+    const card = activeSuggestionCardRef.current;
+    if (!card) return;
+    const activeEl = card.querySelector(".active");
+    activeEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [optIdx, customOpen]);
+
+  useEffect(() => {
+    const card = activePlaceholderCardRef.current;
+    if (!card) return;
+    const activeEl = card.querySelector(".active");
+    activeEl?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [placeholderOptIdx, placeholderCustomOpen]);
+
   // 프롬프트가 길어질수록 textarea 높이를 내용에 맞게 늘려준다.
   // compact(대화 중 하단 컴포저)와 홈 화면 컴포저는 허용 높이를 다르게 둔다.
   // overlay는 mirror-div라 textarea와 정확히 같은 높이/스크롤 위치를 유지해야
@@ -289,6 +457,38 @@ export default function PromptEditor({
       overlayRef.current.scrollTop = el.scrollTop;
     }
   }, [text, compact]);
+
+  // Diagnose가 반환한 오탈자 제안을 사용자가 밑줄을 클릭하는 즉시 적용한다.
+  // LLM이 새 문구를 만드는 것이 아니라 span -> suggest의 결정적 치환이라
+  // 원문에서 해당 span이 여전히 같은 위치에 있을 때만 수정한다.
+  function applyTypoCorrection(typo: TypoRange) {
+    const suggestion = typo.suggest.trim();
+
+    if (!suggestion || suggestion === typo.span) {
+      return;
+    }
+
+    // 분석 응답 이후 사용자가 텍스트를 바꿨다면 stale offset으로 수정하지 않는다.
+    if (text.slice(typo.start, typo.end) !== typo.span) {
+      return;
+    }
+
+    const nextText =
+      text.slice(0, typo.start) + suggestion + text.slice(typo.end);
+    const nextCaret = typo.start + suggestion.length;
+
+    setText(nextText);
+    scheduleAnalyze(nextText);
+
+    // 클릭 때문에 textarea 포커스가 빠지지 않게 하고, 교정된 단어 뒤로 커서를 이동한다.
+    window.requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      textarea.focus();
+      textarea.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
 
   function applySuggestion(value: string, isCustom = false) {
     if (!activeElement) {
@@ -312,7 +512,11 @@ export default function PromptEditor({
       // 행동 기록 실패는 채팅 흐름을 막지 않음 (조용히 무시)
     });
 
-    const nextText = mergePromptWithSuggestion(text, trimmedValue);
+    const anchorOffset = activeSuggestion?.anchor?.charOffset;
+
+    const nextText = anchorOffset !== undefined
+      ? insertSuggestionAtAnchor(text, trimmedValue, anchorOffset)
+      : mergePromptWithSuggestion(text, trimmedValue);
 
     setResolved((prev) => {
       const updated = new Set(prev);
@@ -417,7 +621,9 @@ export default function PromptEditor({
     } else {
       setImproveResult({ ...improveResult, placeholders: remaining });
       setPlaceholderOptIdx(0);
-      setActivePlaceholderIndex((prev) => (prev === null ? null : Math.min(prev, remaining.length - 1)));
+      setActivePlaceholderIndex((prev) =>
+        (prev === null ? null : Math.min(prev, remaining.length - 1))
+      );
     }
   }
 
@@ -460,6 +666,100 @@ export default function PromptEditor({
     return segments;
   }
 
+  // 실시간 overlay에서 Promptune 오탈자 밑줄과 Suggest anchor marker를 동시에 렌더링한다.
+  // 브라우저 기본 spellcheck 밑줄은 textarea에서 꺼두므로, 여기 보이는 물결 밑줄은
+  // diagnose가 실제로 반환한 typo.span에만 생긴다.
+  function renderLiveOverlay() {
+    const nodes = [];
+    let cursor = 0;
+    let key = 0;
+    let anchorInserted = false;
+    const anchor = activeAnchorOffset;
+
+    const pushText = (start: number, end: number, typo?: TypoRange) => {
+      if (start >= end) return;
+
+      const pushChunk = (chunkStart: number, chunkEnd: number) => {
+        if (chunkStart >= chunkEnd) return;
+
+        nodes.push(
+          <span
+            key={`overlay-text-${key++}`}
+            className={typo ? "ov-underline-word" : undefined}
+            data-typo-suggest={typo?.suggest}
+            title={typo ? `${typo.suggest}로 수정` : undefined}
+            style={
+              typo ? { pointerEvents: "auto", cursor: "pointer" } : undefined
+            }
+            onMouseDown={
+              typo
+                ? (event) => {
+                  event.preventDefault();
+                  applyTypoCorrection(typo);
+                }
+                : undefined
+            }
+          >
+            {text.slice(chunkStart, chunkEnd)}
+          </span>,
+        );
+      };
+
+      if (
+        !anchorInserted &&
+        anchor !== null &&
+        anchor >= start &&
+        anchor <= end
+      ) {
+        pushChunk(start, anchor);
+
+        nodes.push(
+          <span
+            key={`overlay-anchor-${key++}`}
+            ref={anchorMarkerRef}
+            className="suggestion-anchor-marker"
+          />,
+        );
+        anchorInserted = true;
+
+        pushChunk(anchor, end);
+        return;
+      }
+
+      pushChunk(start, end);
+    };
+
+    for (const typo of typoRanges) {
+      if (typo.start > cursor) {
+        pushText(cursor, typo.start);
+      }
+
+      pushText(typo.start, typo.end, typo);
+      cursor = typo.end;
+    }
+
+    if (cursor < text.length) {
+      pushText(cursor, text.length);
+    }
+
+    // 빈 텍스트이거나 특수한 경계값에서도 anchor ref가 유실되지 않게 안전장치.
+    if (!anchorInserted && anchor !== null) {
+      nodes.push(
+        <span
+          key={`overlay-anchor-${key++}`}
+          ref={anchorMarkerRef}
+          className="suggestion-anchor-marker"
+        />,
+      );
+    }
+
+    if (nodes.length === 0 && text) {
+      nodes.push(<span key="overlay-plain">{text}</span>);
+    }
+
+    return nodes;
+  }
+
   function skipActiveSuggestion() {
     if (!activeElement) {
       return;
@@ -476,6 +776,7 @@ export default function PromptEditor({
     });
 
     setOptIdx(0);
+    setActiveSuggestionIndex(0);
     setCustomOpen(false);
     setCustomValue("");
   }
@@ -511,7 +812,12 @@ export default function PromptEditor({
         const activePh = orderedPlaceholders[activePlaceholderIndex];
         const options = activePh ? [activePh.primary, ...activePh.alternatives] : [];
 
-        if (e.key === "Tab") {
+        if (e.key === "Enter" && !e.shiftKey) {
+          // 한글 등 조합 중인 Enter는 "적용"으로 취급하지 않음 (조합 확정 Enter가 여기로 새면
+          // 타이핑 중에 의도치 않게 제안이 적용돼버림 - 아래 전송용 Enter와 같은 이유)
+          if (isComposingRef.current || e.nativeEvent.isComposing) {
+            return;
+          }
           e.preventDefault();
           if (!activePh) return;
 
@@ -554,7 +860,11 @@ export default function PromptEditor({
     }
 
     if (activeElement && !customOpen) {
-      if (e.key === "Tab") {
+      if (e.key === "Enter" && !e.shiftKey) {
+        // 한글 등 조합 중인 Enter는 "적용"으로 취급하지 않음
+        if (isComposingRef.current || e.nativeEvent.isComposing) {
+          return;
+        }
         e.preventDefault();
 
         if (optIdx === activeOptions.length) {
@@ -617,6 +927,43 @@ export default function PromptEditor({
     return `${base} ${addition}`.trim();
   }
 
+  function insertSuggestionAtAnchor(
+    text: string,
+    suggestion: string,
+    charOffset: number,
+  ): string {
+    const addition = suggestion.trim();
+
+    if (!addition) {
+      return text;
+    }
+
+    const safeOffset = Math.max(0, Math.min(charOffset, text.length));
+
+    const before = text.slice(0, safeOffset);
+    const after = text.slice(safeOffset);
+
+    const leadingSpace = before.length > 0 && !/\s$/.test(before) ? " " : "";
+
+    const trailingSpace = after.length > 0 && !/^\s/.test(after) ? " " : "";
+
+    return before + leadingSpace + addition + trailingSpace + after;
+  }
+
+  // 파일명에 특정 키워드가 있으면 카테고리를 추측한다. 완벽한 분류는 아니고,
+  //"전부 기타로만 쌓이는" 문제를 줄이기 위한 간단한 휴리스틱.
+  // 더 정교하게 하려면 추후 AI 기반 분류로 교체 가능.
+  function guessDocumentType(filename: string): DocType {
+    const name = filename.toLowerCase();
+
+    if (/규정|정책|policy|규칙/.test(name)) return "규정";
+    if (/양식|템플릿|template|서식/.test(name)) return "양식";
+    if (/가이드|guide|매뉴얼|manual|안내/.test(name)) return "가이드";
+    if (/보고서|report|리포트/.test(name)) return "보고서";
+
+    return "기타";
+  }
+
   async function handleFilesSelected(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) {
       return;
@@ -639,32 +986,45 @@ export default function PromptEditor({
       const task = uploadDocument(
         file,
         file.name,
-        "기타",
+        guessDocumentType(file.name),
         undefined,
       )
-        .then((doc) => {
-          if (
-            doc.indexStatus &&
-            !["READY", "TEXT_READY"].includes(doc.indexStatus)
+        .then(async (doc) => {
+          // 업로드 자체(S3 저장 + DB row 생성)는 이미 성공한 상태.
+          // 인덱싱(검색 가능하게 만드는 작업)이 아직 안 끝났으면 실패가 아니라
+          // "처리 중"으로 보고, 최대 몇 차례 목록을 다시 조회하며 기다린다.
+          // (단일 조회 API가 없어서 목록 조회로 대체)
+          let current = doc;
+          let attempts = 0;
+          const maxAttempts = 5;
+
+          while (
+            current.indexStatus &&
+            !["READY", "TEXT_READY", "FAILED"].includes(current.indexStatus) &&
+            attempts < maxAttempts
           ) {
-            throw new Error(
-              doc.indexStatus === "FAILED"
-                ? `파일 분석에 실패했습니다: ${doc.indexError || file.name}`
-                : `파일이 아직 분석 준비 중입니다: ${file.name}`,
-            );
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+            const list = await listDocuments();
+            const found = list.find((d) => d.id === doc.id);
+            if (found) current = found;
+            attempts += 1;
           }
 
-          uploadedDocsRef.current.set(key, doc);
+          if (current.indexStatus === "FAILED") {
+            throw new Error(`파일 분석에 실패했습니다: ${current.indexError || file.name}`);
+          }
+
+          uploadedDocsRef.current.set(key, current);
 
           setAttachments((prev) =>
             prev.map((attachment) =>
               attachment.key === key
-                ? { ...attachment, status: "done", doc }
+                ? { ...attachment, status: "done", doc: current }
                 : attachment,
             ),
           );
 
-          return doc;
+          return current;
         })
         .catch((error) => {
           console.error("문서 업로드 실패:", error);
@@ -837,6 +1197,58 @@ export default function PromptEditor({
       )}
 
       <div className="composer-box">
+        {receiverCandidate && (
+          <div
+            className={`receiver-candidate-card ${
+              selectedReceiverId === receiverCandidate.id ? "selected" : "unselected"
+            }`}
+          >
+            <div className="receiver-candidate-main">
+              <div className="receiver-candidate-label">
+                개인화 수신자 후보
+              </div>
+
+              <div className="receiver-candidate-name">
+                👤 {receiverCandidate.receiverName}
+              </div>
+
+              <div className="receiver-candidate-meta">
+                {receiverCandidate.relationship && (
+                  <span>{receiverCandidate.relationship}</span>
+                )}
+
+                {receiverCandidate.preferredTone && (
+                  <span>선호 톤 {receiverCandidate.preferredTone}</span>
+                )}
+
+                {receiverCandidate.updatedAt && (
+                  <span>
+                    최근 학습{" "}
+                    {new Date(
+                      receiverCandidate.updatedAt,
+                    ).toLocaleDateString("ko-KR")}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="receiver-candidate-action"
+              aria-pressed={selectedReceiverId === receiverCandidate.id}
+              onClick={() => {
+                const selecting = selectedReceiverId !== receiverCandidate.id;
+                setSelectedReceiverId(selecting ? receiverCandidate.id : null);
+                onReceiverProfileChange?.(selecting ? receiverCandidate : null);
+                textareaRef.current?.focus();
+              }}
+            >
+              {selectedReceiverId === receiverCandidate.id
+                ? "적용됨 ✓"
+                : "적용"}
+            </button>
+          </div>
+        )}
         {quotedMessage && (
           <div className="quote-preview">
             <div className="quote-preview-body">
@@ -856,6 +1268,7 @@ export default function PromptEditor({
           </div>
         )}
         <div
+          ref={inputWrapRef}
           className={`input-wrap ${isDragOver ? "drag-over" : ""}`}
           onDragEnter={(e) => {
             e.preventDefault();
@@ -886,9 +1299,22 @@ export default function PromptEditor({
           <textarea
             ref={textareaRef}
             value={text}
+            spellCheck={false}
             onChange={(e) => {
               const value = e.target.value;
               setText(value);
+
+              if (selectedReceiverId !== null) {
+                const selected = receiverProfiles.find(
+                  (profile) => profile.id === selectedReceiverId,
+                );
+
+                if (!selected || !value.includes(selected.receiverName)) {
+                  setSelectedReceiverId(null);
+                  onReceiverProfileChange?.(null);
+                }
+              }
+
               scheduleAnalyze(value);
             }}
             onCompositionStart={() => {
@@ -926,12 +1352,15 @@ export default function PromptEditor({
             placeholder={placeholder ?? "보내기 전에 먼저 다듬어드려요"}
             rows={1}
           />
-          {/* textarea와 완전히 겹치는 오버레이(mirror-div 기법)로 밑줄만 그려줌.
+          {/* textarea와 완전히 겹치는 오버레이(mirror-div 기법).
               font-size/line-height/padding이 textarea와 정확히 같아야 줄바꿈 위치가 어긋나지 않음(globals.css 참고).
-              improveResult가 있으면 placeholder별로 정확한 위치에 밑줄, 없으면 기존 방식(요소 있으면 전체) 유지. */}
+              다듬기 모드에서는 placeholder 구간만 밑줄로 표시하고, 실시간 모드에서는
+              diagnose가 반환한 실제 오탈자 span만 물결 밑줄로 표시한다. Suggest anchor가
+              있으면 같은 overlay 안에서 정확한 charOffset 위치에 marker도 함께 표시한다.
+              suggestions=[]처럼 anchor가 없을 때 전체 문장을 밑줄 긋지는 않는다. */}
           <div className="overlay" ref={overlayRef} aria-hidden="true">
             {improveResult && improveResult.placeholders.length > 0 ? (
-              (() => {
+              () => {
                 let phIndex = -1;
                 return splitTextByPlaceholders(text, improveResult.placeholders).map((seg, i) => {
                   if (seg.type !== "placeholder") {
@@ -955,23 +1384,29 @@ export default function PromptEditor({
                   );
                 });
               })()
-            ) : activeElement ? (
-              <span className="ov-underline-word">{text}</span>
-            ) : (
-              text
-            )}
+              : renderLiveOverlay()}
           </div>
 
-          {/* 밑줄(=지금은 입력창 전체) 바로 위에 뜨는 플로팅 카드.
-              .input-wrap이 position:relative라 이 카드는 그 기준으로 절대 위치. */}
+          {/* 현재 보완 요소의 플로팅 카드.
+              anchor가 있으면 해당 x 위치를 따라가고, anchor가 없는 직접입력/건너뛰기
+              fallback 카드는 입력창 왼쪽을 기준으로 표시한다. */}
           {!improveResult && unresolvedElements.length > 0 && (
-            <div style={{ position: "absolute", bottom: "calc(100% + 10px)", left: 0, zIndex: 100, width: "min(320px, 100%)" }}>
+            <div
+              style={{
+                position: "absolute",
+                bottom: "calc(100% + 10px)",
+                left: activeAnchorOffset !== null ? `${anchorCardLeft}px` : 0,
+                zIndex: 100,
+                width: "min(320px, 100%)",
+                transition: "left 0.18s ease",
+              }}
+            >
               {unresolvedElements.map((element, idx) => {
                 const offset = idx - activeSuggestionIndex;
                 const isActive = offset === 0;
                 const suggestion = analysisResult?.suggest?.suggestions.find(
-                  (s) => s.element === element,
-                ) ?? null;
+                    (s) => s.element === element,
+                  ) ?? null;
                 const meta = ELEMENT_UI[element] ?? {
                   label: `${element} 요소를 보완하면 좋아요`,
                   question: "어떤 내용을 추가할까요?",
@@ -987,6 +1422,7 @@ export default function PromptEditor({
                   <div
                     key={element}
                     className="ai-suggestion-card"
+                    ref={isActive ? activeSuggestionCardRef : undefined}
                     role="region"
                     aria-label={`${element} 요소 추천`}
                     style={{
@@ -1037,7 +1473,7 @@ export default function PromptEditor({
                         }}
                         onMouseEnter={() => setOptIdx(activeOptions.length)}
                       >
-                        Tab으로 직접 입력
+                        Enter로 직접 입력
                       </button>
                     ) : (
                       <input
@@ -1103,6 +1539,7 @@ export default function PromptEditor({
                   <div
                     key={ph.placeholderText}
                     className="ai-suggestion-card"
+                    ref={isActive ? activePlaceholderCardRef : undefined}
                     role="region"
                     aria-label={`${ph.element} 요소 추천`}
                     style={{
@@ -1155,7 +1592,7 @@ export default function PromptEditor({
                         }}
                         onMouseEnter={() => setPlaceholderOptIdx(options.length)}
                       >
-                        Tab으로 직접 입력
+                        Enter로 직접 입력
                       </button>
                     ) : (
                       <input
@@ -1254,7 +1691,7 @@ export default function PromptEditor({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.docx,.txt,.md"
+              accept=".pdf,.docx,.txt,.md,.xlsx,.pptx"
               multiple
               hidden
               onChange={(e) => {
@@ -1317,9 +1754,7 @@ export default function PromptEditor({
 
       {!compact && (
         <div className="hint">
-          <b>왜 이렇게 표시되나요?</b> KcELECTRA가 프롬프트의 8요소 충족 여부를
-          진단하고, 보완이 필요한 요소 중 우선순위가 높은 항목에 대해 추천
-          문구를 제안해요.
+          <b>PrompTune</b>이 프롬프트의 모호함을 진단하고, 보완이 필요한 요소 중 우선순위가 높은 항목에 대해 추천 문구를 제안해요.
         </div>
       )}
 

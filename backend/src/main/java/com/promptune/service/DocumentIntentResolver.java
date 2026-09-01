@@ -32,7 +32,7 @@ public class DocumentIntentResolver {
             "(업무\\s*보고서|주간\\s*보고서|월간\\s*보고서|보고서|회의록|계획서|제안서|시말서|경위서|사유서|소명서|공지문|안내문|문서|양식|템플릿)");
 
     private static final Pattern FILE_NOUN = Pattern.compile(
-            "(파일|pdf|워드|word|docx)",
+            "(파일|pdf|워드|word|docx|엑셀|excel|xlsx|마크다운|markdown|텍스트파일|txt|ppt|파워포인트|슬라이드|프레젠테이션)",
             Pattern.CASE_INSENSITIVE);
 
     private static final Pattern AFFIRMATIVE = Pattern.compile(
@@ -199,6 +199,26 @@ public class DocumentIntentResolver {
 
         if (containsAny(text, "워드", "word", "docx")) {
             return "docx";
+        }
+
+        if (containsAny(text, "ppt", "파워포인트", "슬라이드", "프레젠테이션")) {
+            return "pptx";
+        }
+
+        if (containsAny(text, "ppt", "파워포인트", "슬라이드", "프레젠테이션")) {
+            return "pptx";
+        }
+
+        if (containsAny(text, "엑셀", "excel", "xlsx", "스프레드시트")) {
+            return "xlsx";
+        }
+
+        if (containsAny(text, "마크다운", "markdown", ".md")) {
+            return "md";
+        }
+
+        if (containsAny(text, "텍스트파일", "txt", "메모장")) {
+            return "txt";
         }
 
         if (containsAny(text, "pdf")) {

@@ -115,9 +115,7 @@ public final class DocumentReferenceResolver {
             String prompt,
             List<Document> documents) {
 
-        if (!shouldSearchCatalog(prompt)
-                || documents == null
-                || documents.isEmpty()) {
+        if (documents == null || documents.isEmpty()) {
             return Resolution.none();
         }
 
@@ -134,6 +132,58 @@ public final class DocumentReferenceResolver {
                 .toList();
 
         if (ranked.isEmpty()) {
+            return Resolution.none();
+        }
+
+        // 문서 종류 keyword보다 실제 보유 파일의 title identity가 더 강한 신호다.
+        // 따라서 "이력서", "계약서", "발표자료"...를 Router에 끝없이 추가하지 않는다.
+        Document strongTitleDocument = documents.stream()
+                .filter(Objects::nonNull)
+                .filter(DocumentReferenceResolver::isReadable)
+                .max(Comparator.comparingDouble(
+                        doc -> titleReferenceScore(prompt, doc.getTitle())))
+                .orElse(null);
+
+        double strongTitleScore =
+                strongTitleDocument == null
+                        ? 0.0
+                        : titleReferenceScore(
+                                prompt,
+                                strongTitleDocument.getTitle());
+
+        if (strongTitleDocument != null && strongTitleScore >= 0.84) {
+            Candidate titleCandidate = new Candidate(
+                    strongTitleDocument.getId(),
+                    safe(strongTitleDocument.getTitle()),
+                    safe(strongTitleDocument.getDocumentType()),
+                    strongTitleScore);
+
+            java.util.List<Candidate> candidates =
+                    new java.util.ArrayList<>();
+
+            candidates.add(titleCandidate);
+
+            ranked.stream()
+                    .filter(candidate ->
+                            !Objects.equals(
+                                    candidate.documentId(),
+                                    strongTitleDocument.getId()))
+                    .limit(4)
+                    .forEach(candidates::add);
+
+            return new Resolution(
+                    List.of(strongTitleDocument.getId()),
+                    strongTitleScore >= 0.98
+                            ? "CATALOG_TITLE_EXACT"
+                            : "CATALOG_TITLE_REFERENCE",
+                    strongTitleScore,
+                    candidates);
+        }
+
+        // title로 특정 파일을 가리키지 않는 일반 요청에 대해서만
+        // 기존 catalog-intent gate를 적용한다.
+        // 따라서 "보고서 만들어줘"가 사내 파일을 멋대로 선택하는 회귀는 막는다.
+        if (!shouldSearchCatalog(prompt)) {
             return Resolution.none();
         }
 
@@ -305,6 +355,59 @@ public final class DocumentReferenceResolver {
                 "CATALOG_SEMANTIC",
                 top.score(),
                 ranked.subList(0, Math.min(5, ranked.size())));
+    }
+
+    private static double titleReferenceScore(
+            String prompt,
+            String rawTitle) {
+
+        String queryCompact = compact(prompt);
+        String title = stripExtension(rawTitle);
+        String titleCompact = compact(title);
+
+        if (queryCompact.isBlank()
+                || titleCompact.isBlank()
+                || titleCompact.length() < 3) {
+            return 0.0;
+        }
+
+        // 파일명을 거의 그대로 말한 경우.
+        if (queryCompact.contains(titleCompact)) {
+            return 1.0;
+        }
+
+        Set<String> titleTokens = tokens(title);
+
+        if (titleTokens.isEmpty()) {
+            return 0.0;
+        }
+
+        java.util.List<String> matched =
+                titleTokens.stream()
+                        .filter(token ->
+                                token.length() >= 2
+                                        && queryCompact.contains(compact(token)))
+                        .toList();
+
+        // 예: title="차승연 프로젝트 이력서 초안"
+        // query="차승연 이력서에 무슨 내용 있어?"
+        // -> 차승연 + 이력서 두 identity token이 겹치므로 강한 파일 참조.
+        if (matched.size() >= 3) {
+            return 0.95;
+        }
+
+        if (matched.size() >= 2) {
+            return 0.88;
+        }
+
+        // Spectrum, SeungyeonCha처럼 충분히 긴 고유 토큰 하나도
+        // 파일 identity로 사용할 수 있다.
+        if (matched.size() == 1
+                && matched.get(0).length() >= 6) {
+            return 0.84;
+        }
+
+        return 0.0;
     }
 
     private static double metadataScore(

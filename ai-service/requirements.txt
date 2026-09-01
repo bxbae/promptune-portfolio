@@ -23,11 +23,15 @@ av
 # 이하를 써야 휠이 잡힌다(eva-decord가 아직 cp312/3.13 휠은 안 냄).
 eva-decord
 
-psycopg[binary]
+# Oracle Cloud Free(Always Free Autonomous Database)로 이전하면서 psycopg 대신
+# python-oracledb로 교체. "thin mode"라 Oracle Instant Client 같은 별도 네이티브
+# 설치가 필요 없어 Render 같은 PaaS에도 그대로 배포된다.
+oracledb
 
 tavily-python
 pypdf
 python-docx
+python-pptx
 python-multipart
 PyMuPDF
 scikit-learn==1.7.2

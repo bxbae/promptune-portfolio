@@ -8,7 +8,6 @@ from app.services.validation.validator import FinalValidationResult
 
 class ValidateEndpointTest(unittest.TestCase):
 
-    @patch("app.routers.pipeline.USE_REAL_VALIDATION", True)
     @patch("app.routers.pipeline.validate_response")
     def test_validate_endpoint_uses_real_validator(
         self,

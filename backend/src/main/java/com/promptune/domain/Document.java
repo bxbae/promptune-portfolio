@@ -22,7 +22,7 @@ public class Document {
     @Column(name = "file_type")
     private String fileType;
 
-    @Column(columnDefinition = "TEXT")
+    @Column(columnDefinition = "CLOB")
     private String description;
 
     @Column(name = "document_type")
@@ -34,7 +34,7 @@ public class Document {
     @Column(name = "index_status", nullable = false)
     private String indexStatus = "UPLOADED";
 
-    @Column(name = "index_error", columnDefinition = "TEXT")
+    @Column(name = "index_error", columnDefinition = "CLOB")
     private String indexError;
 
     @Column(name = "indexed_at")

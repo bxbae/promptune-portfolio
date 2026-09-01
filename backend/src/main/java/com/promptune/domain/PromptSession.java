@@ -14,10 +14,10 @@ public class PromptSession {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "original_text", nullable = false, columnDefinition = "TEXT")
+    @Column(name = "original_text", nullable = false, columnDefinition = "CLOB")
     private String originalText;
 
-    @Column(name = "final_text", columnDefinition = "TEXT")
+    @Column(name = "final_text", columnDefinition = "CLOB")
     private String finalText;
 
     @Column(name = "task_type")
@@ -31,7 +31,7 @@ public class PromptSession {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
-    @Column(name = "ai_response_text", columnDefinition = "TEXT")
+    @Column(name = "ai_response_text", columnDefinition = "CLOB")
     private String aiResponseText;
 
     protected PromptSession() {}

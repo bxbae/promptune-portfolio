@@ -442,7 +442,10 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         self.assertEqual(kwargs["topic"], "general")
         self.assertEqual(
             kwargs["include_domains"],
-            ["ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
         )
 
     @patch("app.services.retrieval.tavily_search.TavilyClient")
@@ -458,7 +461,10 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         _, kwargs = mock_client.search.call_args
         self.assertEqual(
             kwargs["include_domains"],
-            ["ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
         )
 
     @patch("app.services.retrieval.tavily_search.TavilyClient")
@@ -480,7 +486,39 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         _, kwargs = mock_client.search.call_args
         self.assertEqual(
             kwargs["include_domains"],
-            ["ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
+        )
+
+    @patch("app.services.retrieval.tavily_search.TavilyClient")
+    def test_music_sports_profile_query_combines_wiki_and_trusted_news_domains(
+        self, mock_client_cls
+    ):
+        # 2026-08-27: "링크 목록에 내가 검색한 검색 결과에 사용될 링크 중에
+        # ytn이나 mbc 나, 올림픽, 그래미 사이트 검색 링크가 있다면 함께
+        # 링크를 추가로 넣어줄 수 있을까? 검색 신뢰도를 높이기 위해서야."
+        # 라는 요청에 따라, 음악/체육 프로필 질의(예: "리센느")는 위키/나무위키
+        # /올림픽/그래미뿐 아니라 신뢰 뉴스 도메인(네이버뉴스/YTN/MBC)도
+        # 같은 include_domains 목록에 함께 담아, Tavily가 실제로 매칭되는
+        # 콘텐츠를 찾은 도메인이면 무엇이든 "출처 더보기" 링크로 함께 노출될
+        # 수 있도록 한다.
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "results": [{"title": "리센느", "url": "u", "content": "c"}]
+        }
+        mock_client_cls.return_value = mock_client
+
+        search_web("리센느 가수 프로필 알려줘. 발매 곡 기준으로", max_results=3)
+
+        _, kwargs = mock_client.search.call_args
+        self.assertEqual(
+            kwargs["include_domains"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
         )
 
     @patch("app.services.retrieval.tavily_search.TavilyClient")
@@ -508,7 +546,10 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         self.assertEqual(first_kwargs["topic"], "general")
         self.assertEqual(
             first_kwargs["include_domains"],
-            ["ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
         )
         self.assertNotIn("include_domains", second_kwargs)
 
@@ -663,7 +704,10 @@ class NonMusicSportsProfileDomainsTest(unittest.TestCase):
         _, kwargs = mock_client.search.call_args
         self.assertEqual(
             kwargs["include_domains"],
-            ["ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com"],
+            [
+                "ko.wikipedia.org", "namu.wiki", "olympics.com", "grammy.com",
+                "news.naver.com", "ytn.co.kr", "imnews.imbc.com",
+            ],
         )
 
 

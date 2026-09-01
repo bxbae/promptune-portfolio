@@ -110,7 +110,7 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             side_effect=_predict_missing_with_valid_candidates(
                 req.text
             ),
@@ -150,16 +150,27 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
 
     @patch(
         "app.services.suggest_hcx._generate_candidates",
-        return_value=[
-            "첫 번째 후보.",
-            "두 번째 후보.",
-            "세 번째 후보.",
-        ],
     )
     def test_suggest_generates_for_each_target_element(
         self,
         mock_generate,
     ):
+        def generate_candidates(**kwargs):
+            if kwargs["element"] == "AUDIENCE":
+                return [
+                    "팀장님께 전달하는 메일로 작성해줘.",
+                    "프로젝트 담당자에게 전달하는 메일로 작성해줘.",
+                    "수신자를 관련 부서 담당자로 설정해줘.",
+                ]
+
+            return [
+                "첫 번째 후보.",
+                "두 번째 후보.",
+                "세 번째 후보.",
+            ]
+
+        mock_generate.side_effect = generate_candidates
+
         req = SuggestRequest(
             text="경쟁사 정보를 정리해줘",
             target_elements=[
@@ -171,7 +182,7 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             side_effect=_predict_missing_with_valid_candidates(
                 req.text
             ),
@@ -215,7 +226,7 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             return_value={
                 **{
                     element: 0
@@ -247,7 +258,7 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             return_value={
                 **{
                     element: 0
@@ -290,6 +301,31 @@ class DynamicHcxSuggestionTest(unittest.TestCase):
                 "다섯 번째 후보.",
             ],
         )
+
+    def test_constraint_prompt_contains_constraint_specific_rules(self):
+        from app.services.suggest_hcx import _build_generation_prompt
+
+        prompt = _build_generation_prompt(
+            text="회의 결과를 정리해줘",
+            context=None,
+            element="CONSTRAINT",
+        )
+
+        self.assertIn("CONSTRAINT 전용 규칙", prompt)
+        self.assertIn("제외 조건", prompt)
+
+
+    def test_example_prompt_contains_example_specific_rules(self):
+        from app.services.suggest_hcx import _build_generation_prompt
+
+        prompt = _build_generation_prompt(
+            text="회의 결과를 정리해줘",
+            context=None,
+            element="EXAMPLE",
+        )
+
+        self.assertIn("EXAMPLE 전용 규칙", prompt)
+        self.assertIn("형태나 구조", prompt)    
 
 
 if __name__ == "__main__":

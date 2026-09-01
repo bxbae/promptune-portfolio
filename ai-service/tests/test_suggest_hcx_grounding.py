@@ -158,7 +158,7 @@ class SuggestionGroundingTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             return_value=state(CONTEXT=1),
         ):
             result = suggest(req)
@@ -192,7 +192,7 @@ class SuggestionGroundingTest(unittest.TestCase):
         )
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             side_effect=[
                 state(FORMAT=1),
                 state(FORMAT=0),
@@ -244,7 +244,7 @@ class SuggestionGroundingTest(unittest.TestCase):
         mock_grounding.return_value = [context]
 
         with patch(
-            "app.services.suggest_hcx.predict_missing",
+            "app.services.suggest_hcx.predict_missing_with_rules",
             side_effect=[
                 state(CONTEXT=1),
                 state(CONTEXT=0),
@@ -264,6 +264,75 @@ class SuggestionGroundingTest(unittest.TestCase):
         mock_generate.assert_called_once()
 
         mock_grounding.assert_called_once_with(
+            context=context,
+            candidates=[context],
+        )
+
+    @patch(
+        "app.services.suggest_hcx._filter_context_grounded_candidates",
+    )
+    @patch(
+        "app.services.suggest_hcx._generate_candidates",
+    )
+    def test_context_suggest_uses_explicit_context_when_generated_candidates_fail_diagnosis_guard(
+        self,
+        mock_generate,
+        mock_grounding,
+    ):
+        context = (
+            "프로젝트 개발 일정이 3일 지연되었습니다. "
+            "지연 원인은 AI 모델 검증 작업이 추가되었기 때문이며, "
+            "새로운 완료 예정일은 8월 28일입니다."
+        )
+
+        generated_candidate = (
+            "프로젝트 일정이 3일 지연되었으며 "
+            "완료 예정일은 8월 28일입니다."
+        )
+
+        req = SuggestRequest(
+            text="팀장님께 프로젝트 일정이 늦어질 것 같다고 메일 써줘.",
+            context=context,
+            target_elements=["CONTEXT"],
+        )
+
+        mock_generate.return_value = [generated_candidate]
+
+        mock_grounding.side_effect = [
+            [generated_candidate],
+            [context],
+        ]
+
+        with patch(
+            "app.services.suggest_hcx.predict_missing_with_rules",
+            side_effect=[
+                state(CONTEXT=1),
+                state(CONTEXT=1),
+                state(CONTEXT=0),
+            ],
+        ):
+            result = suggest(req)
+
+        self.assertEqual(len(result.suggestions), 1)
+        self.assertEqual(
+            result.suggestions[0].element,
+            "CONTEXT",
+        )
+        self.assertEqual(
+            result.suggestions[0].primary,
+            context,
+        )
+
+        self.assertEqual(
+            mock_grounding.call_count,
+            2,
+        )
+
+        mock_grounding.assert_any_call(
+            context=context,
+            candidates=[generated_candidate],
+        )
+        mock_grounding.assert_any_call(
             context=context,
             candidates=[context],
         )

@@ -138,9 +138,6 @@ class DocumentIdsRoutingTest(unittest.TestCase):
             )
 
         with patch(
-            "app.services.retrieval.retrieval_orchestrator.USE_REAL_RETRIEVAL",
-            True,
-        ), patch(
             "app.services.retrieval.retrieval_orchestrator.retrieve_document_overview",
             side_effect=fake_overview,
         ):
@@ -172,9 +169,6 @@ class DocumentIdsRoutingTest(unittest.TestCase):
             return RetrieveResponse(documents=[])
 
         with patch(
-            "app.services.retrieval.retrieval_orchestrator.USE_REAL_RETRIEVAL",
-            True,
-        ), patch(
             "app.services.retrieval.retrieval_orchestrator.retrieve",
             side_effect=fake_retrieve,
         ):
@@ -220,7 +214,13 @@ class DocumentIdsRoutingTest(unittest.TestCase):
 
         captured = {}
 
-        def fake_search_web(query, max_results):
+        def fake_search_web(
+            query,
+            max_results,
+            time_range=None,
+            search_intent=None,
+            entity=None,
+        ):
             captured["query"] = query
             return []
 

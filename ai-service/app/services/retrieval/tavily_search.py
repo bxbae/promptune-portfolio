@@ -110,11 +110,23 @@ def _is_non_music_sports_profile_query(query: str) -> bool:
 
 
 def _profile_domains(query: str) -> list[str]:
+    # 2026-08-27: "위키백과 링크만 나오는데, YTN/MBC/올림픽/그래미 사이트에도
+    # 검색 결과가 있으면 신뢰도를 높이기 위해 같이 넣어달라"는 사용자 요청이
+    # 확인됨. 기존에는 음악/체육인 프로필이면 위키+올림픽+그래미만, 비-음악/
+    # 체육 인물이면 위키+신뢰뉴스만 - 즉 둘 중 하나만 후보에 넣었어서, 예를
+    # 들어 아이돌 그룹처럼 grammy.com/olympics.com에 문서가 없는 음악인은
+    # 신뢰뉴스 도메인이 아예 후보에 없어 위키 링크만 나올 수밖에 없었다.
+    # include_domains는 "이 안에서만 찾아라"는 제약일 뿐이고 관련 없는
+    # 도메인을 넣어도 결과가 나빠지지 않으므로(그 도메인에 해당 인물 문서가
+    # 없으면 그냥 안 나올 뿐), 신뢰 뉴스 도메인을 항상 함께 후보에 넣어서
+    # Tavily가 실제로 찾은 도메인이면 어디든 결과에 섞여 나올 수 있게 한다.
     if _is_non_music_sports_profile_query(query):
         return list(
             dict.fromkeys(["ko.wikipedia.org", "namu.wiki"] + _trusted_domains())
         )
-    return list(_PROFILE_BASE_DOMAINS)
+    return list(
+        dict.fromkeys(_PROFILE_BASE_DOMAINS + _trusted_domains())
+    )
 
 
 # 2026-08-26: "최근 골 소식과 관련해서" 같은 요청에 몇 달~몇 년 전 기사가 섞여
@@ -196,7 +208,13 @@ def _run_search(client, query, max_results, topic, include_domains, time_range=N
     return [r for r in results if not _is_stale_wiki_revision(r)]
 
 
-def search_web(query, max_results=5, time_range=None):
+def search_web(
+    query,
+    max_results=5,
+    time_range=None,
+    search_intent=None,
+    entity=None,
+):
     if not query.strip():
         raise ValueError("검색어가 비어 있습니다.")
 
@@ -207,7 +225,27 @@ def search_web(query, max_results=5, time_range=None):
     client = TavilyClient(api_key=api_key)
     query = query.strip()
 
-    if _is_finance_query(query):
+    intent = str(
+        search_intent or ""
+    ).strip().upper()
+
+    use_finance_policy = (
+        intent == "FINANCE"
+        or (
+            not intent
+            and _is_finance_query(query)
+        )
+    )
+
+    use_profile_policy = (
+        intent == "PROFILE"
+        or (
+            not intent
+            and _is_profile_query(query)
+        )
+    )
+
+    if use_finance_policy:
         # 시세류 질의는 항상 "오늘/지금" 기준 최신값이 필요하므로 time_range를
         # 별도로 받지 않는다 - topic="finance" 자체가 이미 최신 시세 데이터
         # 소스로 좁혀져 있어 추가 제한이 오히려 결과를 0건으로 만들 위험이 크다.
@@ -217,7 +255,7 @@ def search_web(query, max_results=5, time_range=None):
             include_domains=None,
         )
 
-    if _is_profile_query(query):
+    if use_profile_policy:
         # topic="news"가 아니라 "general"을 쓴다 - 위키백과/나무위키 문서는
         # Tavily 기준 "뉴스" 콘텐츠가 아니라서, topic="news"로 두면
         # include_domains에 넣어도 결과 자체가 안 나올 위험이 있다.

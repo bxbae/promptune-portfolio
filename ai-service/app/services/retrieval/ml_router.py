@@ -8,6 +8,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.svm import LinearSVC
 
+from app.services.retrieval.query_intent import is_external_entity_lookup_query
+
 
 APP = Path(__file__).resolve().parents[2]
 TRAIN_PATH = APP / "data/rag/routing_train_242.json"
@@ -268,18 +270,102 @@ def _is_external_subject_summary_query(query: str) -> bool:
     return has_about and has_ask and not has_first_person and not has_internal_topic
 
 
-def classify_ml_retrieval_route(query: str) -> str:
+_COMPANY_INTERNAL_SCOPE_MARKERS = (
+    "우리회사",
+    "우리 회사",
+    "사내",
+    "내부",
+    "우리팀",
+    "우리 팀",
+)
+
+_INTERNAL_ARTIFACT_MARKERS = (
+    "보고서",
+    "양식",
+    "템플릿",
+    "규정",
+    "정책",
+    "지침",
+    "가이드",
+    "매뉴얼",
+    "문서",
+    "파일",
+)
+
+
+def _is_company_internal_artifact_query(query: str) -> bool:
+    text = str(query or "").strip().lower()
+
+    if not text:
+        return False
+
+    compact = "".join(text.split())
+
+    has_scope = any(
+        "".join(marker.split()) in compact
+        for marker in _COMPANY_INTERNAL_SCOPE_MARKERS
+    )
+
+    has_artifact = any(
+        marker in text
+        for marker in _INTERNAL_ARTIFACT_MARKERS
+    )
+
+    return has_scope and has_artifact
+
+
+def resolve_strong_retrieval_route(query: str) -> str | None:
+    """
+    ML 예측과 무관하게 retrieval source가 명확한 질의를 먼저 판정한다.
+
+    이 함수의 반환값은 confidence가 낮은 ActionClassifier 결과보다 우선할 수 있다.
+    명백한 문서 참조, 실시간 사실, 외부 entity/profile 같은 경우만 다룬다.
+    """
     if _is_restricted(query):
         return "not_rag_or_restricted"
 
-    if _is_explicit_internal_rag(query):
+    if (
+        _is_explicit_internal_rag(query)
+        or _is_company_internal_artifact_query(query)
+    ):
         return "internal_rag"
+
+    if is_external_entity_lookup_query(query):
+        return "external_or_realtime"
 
     if _is_likely_realtime_fact(query):
         return "external_or_realtime"
 
     if _is_third_party_profile_query(query):
         return "external_or_realtime"
+
+    # 2026-08-31: PR #207(action-aware retrieval 리팩터)이 라우팅 판단을
+    # classify_ml_retrieval_route(ML SVC + 이 함수의 결정적 규칙들)에서
+    # resolve_action(TF-IDF/LogisticRegression 기반 ActionClassifier,
+    # confidence < 0.25면 검색 자체를 포기)으로 옮기면서, 바로 아래
+    # _is_external_subject_summary_query 체크(2026-08-26에 "리센느에 대하여
+    # 소개해줘" 오분류를 고치려고 추가했던 규칙)를 이 함수로 옮기는 걸
+    # 누락했다. 그 결과 "고마워! 리센느 걸그룹에 대해 알려줘." 같은 질의가
+    # 실제 운영에서 재현됨: action_train.json에 "고마워"를 포함하는 학습
+    # 예시가 "고마워"(CHAT) 단 1건뿐이라, 앞에 "고마워!"가 붙은 WEB_FACT성
+    # 질의는 char n-gram 특성이 CHAT 쪽으로 끌려가 confidence가 0.239로
+    # 떨어져 reason='low_confidence_needs_strong_signal'로 검색을 완전히
+    # 건너뛰고, HCX가 근거 없이 리센느 멤버/NFT 사업 등을 지어내는 답을
+    # 냈다(sources=() - "출처 더보기"가 안 뜬 이유). "OO에 대해 알려줘/
+    # 소개해줘/설명해줘/요약해줘/정리해줘" 패턴은 (내부 문서/자기참조 주제가
+    # 아닌 한) ActionClassifier의 confidence와 무관하게 항상 실시간 검색으로
+    # 보내야 하므로, 결정적 규칙으로 다시 여기에 포함시킨다.
+    if _is_external_subject_summary_query(query):
+        return "external_or_realtime"
+
+    return None
+
+
+def classify_ml_retrieval_route(query: str) -> str:
+    strong_route = resolve_strong_retrieval_route(query)
+
+    if strong_route is not None:
+        return strong_route
 
     predicted = _ROUTER.predict(query)
 

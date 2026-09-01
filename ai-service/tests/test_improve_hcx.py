@@ -347,6 +347,56 @@ class TestImproveRuntime(unittest.TestCase):
             _contains_meta_output("매출 분석 보고서를 작성해줘")
         )
 
+    def test_output_preserves_original_numbers(self):
+        req = make_request(
+            text="개발 일정이 3일 지연됐고 완료 예정일은 8월 28일이야",
+            missing_elements=[],
+        )
+
+        output = (
+            "개발 일정이 3일 지연됐고 "
+            "완료 예정일은 8월 28일이야."
+        )
+
+        self.assertTrue(_is_acceptable_output(req, output))
+
+
+    def test_output_missing_original_number_is_rejected(self):
+        req = make_request(
+            text="개발 일정이 3일 지연됐고 완료 예정일은 8월 28일이야",
+            missing_elements=[],
+        )
+
+        output = "개발 일정이 지연됐고 완료 예정일은 8월 28일이야."
+
+        self.assertFalse(_is_acceptable_output(req, output))
+
+    def test_output_missing_explicit_constraint_is_rejected(self):
+        req = make_request(
+            text="회의 내용을 요약해줘. 개인정보는 포함하지 마.",
+            missing_elements=[],
+        )
+
+        output = "회의 내용을 명확하게 요약해줘."
+
+        self.assertFalse(
+            _is_acceptable_output(req, output)
+        )    
+
+    def test_output_preserves_explicit_constraint(self):
+        req = make_request(
+            text="회의 내용을 요약해줘. 개인정보는 포함하지 마.",
+            missing_elements=[],
+        )
+
+        output = (
+            "회의 내용을 명확하게 요약해줘. "
+            "개인정보는 포함하지 마."
+        )
+
+        self.assertTrue(
+            _is_acceptable_output(req, output)
+        )
 
 if __name__ == "__main__":
     unittest.main()
