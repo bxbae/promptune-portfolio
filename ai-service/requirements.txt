@@ -10,7 +10,10 @@ timm
 av
 decord; platform_machine == "x86_64"
 
-psycopg[binary]
+# Oracle Cloud Free(Always Free Autonomous Database)로 이전하면서 psycopg 대신
+# python-oracledb로 교체. "thin mode"라 Oracle Instant Client 같은 별도 네이티브
+# 설치가 필요 없어 Render 같은 PaaS에도 그대로 배포된다.
+oracledb
 
 tavily-python
 pypdf

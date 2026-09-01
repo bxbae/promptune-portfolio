@@ -33,7 +33,7 @@ public class MicrosoftConnection {
     @Column(
         name = "token_cache_encrypted",
         nullable = false,
-        columnDefinition = "TEXT"
+        columnDefinition = "CLOB"
     )
     private String tokenCacheEncrypted;
 

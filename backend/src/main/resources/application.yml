@@ -1,8 +1,21 @@
 spring:
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/promptune}
-    username: ${SPRING_DATASOURCE_USERNAME:promptune}
+    # Oracle Cloud Free(Always Free Autonomous Database)용 지갑 없는 TLS 전용 접속 문자열.
+    # OCI 콘솔 → Autonomous Database 상세 페이지 → Database connection에서 인증 방식을
+    # "Mutual TLS (mTLS)"가 아니라 "TLS"로 선택해야 이 형태의 URL(지갑 zip 불필요)을 쓸 수 있다.
+    # 거기서 복사한 접속 문자열을 SPRING_DATASOURCE_URL 환경변수에 그대로 넣으면 된다.
+    # 예시(실제 host/service_name은 콘솔에서 확인한 값으로 교체):
+    #   jdbc:oracle:thin:@(description=(retry_count=20)(retry_delay=3)(address=(protocol=tcps)
+    #   (port=1521)(host=adb.ap-chuncheon-1.oraclecloud.com))(connect_data=(service_name=
+    #   xxxxxxxxxxxxx_promptune_medium.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+    url: ${SPRING_DATASOURCE_URL:jdbc:oracle:thin:@REPLACE_WITH_OCI_CONSOLE_TLS_CONNECTION_STRING}
+    username: ${SPRING_DATASOURCE_USERNAME:ADMIN}
     password: ${SPRING_DATASOURCE_PASSWORD:promptune}
+    driver-class-name: oracle.jdbc.OracleDriver
+    hikari:
+      # Always Free Autonomous Database는 ECPU가 넉넉하지 않아 동시 세션 수가 제한적이다.
+      # Spring Boot 기본값(10)보다 낮춰서 커넥션 풀이 DB 쪽 세션 한도를 넘지 않게 한다.
+      maximum-pool-size: 5
   servlet:
     multipart:
       max-file-size: 25MB
@@ -12,6 +25,7 @@ spring:
       ddl-auto: validate      # 스키마는 Flyway가 관리
     properties:
       hibernate.format_sql: true
+      hibernate.dialect: org.hibernate.dialect.OracleDialect
   flyway:
     enabled: true
     baseline-on-migrate: true
