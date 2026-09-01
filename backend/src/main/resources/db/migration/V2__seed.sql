@@ -1,3 +1,5 @@
+ALTER SESSION DISABLE PARALLEL DML;
+
 -- PrompTune 목업 시드 데이터
 -- Flyway V2: V1(스키마) 다음에 자동 실행됨. 순서 보장됨.
 
