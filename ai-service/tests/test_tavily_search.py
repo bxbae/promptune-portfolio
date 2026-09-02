@@ -438,7 +438,11 @@ class ProfileQueryDomainsTest(unittest.TestCase):
 
         search_web("그럼 이강인 축구선수에대해 알려줘 지금 소속팀과 프로필 부탁해", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로가 위키/나무위키 검색 뒤에 최근 뉴스 보조
+        # 검색을 한 번 더 호출하도록 바뀌어서(신선도 보완), 이제 마지막
+        # 호출은 그 보조 뉴스 호출이다 - 이 테스트가 확인하려는 "기본 프로필
+        # 도메인 검색"은 첫 번째 호출을 봐야 한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(kwargs["topic"], "general")
         self.assertEqual(
             kwargs["include_domains"],
@@ -458,7 +462,9 @@ class ProfileQueryDomainsTest(unittest.TestCase):
 
         search_web("어느 가수의 프로필을 알려줘", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(
             kwargs["include_domains"],
             [
@@ -483,7 +489,9 @@ class ProfileQueryDomainsTest(unittest.TestCase):
 
         search_web("이강인 소속과 프로필을 알려줘", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(
             kwargs["include_domains"],
             [
@@ -512,7 +520,9 @@ class ProfileQueryDomainsTest(unittest.TestCase):
 
         search_web("리센느 가수 프로필 알려줘. 발매 곡 기준으로", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(
             kwargs["include_domains"],
             [
@@ -529,6 +539,11 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         mock_client.search.side_effect = [
             {"results": []},
             {"results": [{"title": "t2", "url": "u2", "content": "c2"}]},
+            # 2026-09-02: PROFILE 경로가 위키/나무위키 검색(위 두 건) 뒤에
+            # 최근 뉴스 보조 검색을 한 번 더 호출한다 - 여기선 보조 검색도
+            # 결과가 없다고 가정해서(빈 리스트) 최종 결과가 기존과 동일하게
+            # 유지되는지만 함께 확인한다.
+            {"results": []},
         ]
         mock_client_cls.return_value = mock_client
 
@@ -539,10 +554,11 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         self.assertEqual(
             results, [{"title": "t2", "url": "u2", "content": "c2"}]
         )
-        self.assertEqual(mock_client.search.call_count, 2)
+        self.assertEqual(mock_client.search.call_count, 3)
 
         first_kwargs = mock_client.search.call_args_list[0].kwargs
         second_kwargs = mock_client.search.call_args_list[1].kwargs
+        third_kwargs = mock_client.search.call_args_list[2].kwargs
         self.assertEqual(first_kwargs["topic"], "general")
         self.assertEqual(
             first_kwargs["include_domains"],
@@ -552,6 +568,8 @@ class ProfileQueryDomainsTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("include_domains", second_kwargs)
+        self.assertEqual(third_kwargs["topic"], "news")
+        self.assertEqual(third_kwargs["time_range"], "week")
 
     @patch("app.services.retrieval.tavily_search.TavilyClient")
     def test_stale_wiki_revision_results_are_filtered_out(
@@ -592,6 +610,10 @@ class ProfileQueryDomainsTest(unittest.TestCase):
                 ]
             },
             {"results": [{"title": "이강인 최신", "url": "u2", "content": "c2"}]},
+            # 2026-09-02: 위키/나무위키 검색(위 두 건) 뒤에 최근 뉴스 보조
+            # 검색이 한 번 더 호출된다 - 여기선 보조 검색도 결과가 없다고
+            # 가정해서 최종 결과가 기존과 동일하게 유지되는지만 확인한다.
+            {"results": []},
         ]
         mock_client_cls.return_value = mock_client
 
@@ -600,7 +622,7 @@ class ProfileQueryDomainsTest(unittest.TestCase):
         self.assertEqual(
             results, [{"title": "이강인 최신", "url": "u2", "content": "c2"}]
         )
-        self.assertEqual(mock_client.search.call_count, 2)
+        self.assertEqual(mock_client.search.call_count, 3)
 
     @patch("app.services.retrieval.tavily_search.TavilyClient")
     def test_non_profile_query_is_unaffected(self, mock_client_cls):
@@ -623,6 +645,143 @@ class ProfileQueryDomainsTest(unittest.TestCase):
             ["news.naver.com", "ytn.co.kr", "imnews.imbc.com"],
         )
         self.assertEqual(mock_client.search.call_count, 1)
+
+
+class ProfileRecentNewsSupplementTest(unittest.TestCase):
+    """
+    2026-09-02: "이강인 선수에 대해 알려줘"처럼 "최근"/"최신"/"오늘" 같은
+    시점 표현이 전혀 없는 프로필 질의는 search_plan.py가 freshness="NONE"
+    으로 분류하고, 그러면 이 PROFILE 경로가 time_range 없이 위키백과/
+    나무위키만 한 번 찾고 끝나서 소속팀 변경 같은 최신 사실을 반영하지
+    못하는 사례가 확인됨. 사용자가 "최근"을 안 썼어도 프로필 질의는 최근
+    1주일 이내 뉴스를 보조로 함께 가져오게 고쳤다 - 이 동작을 고정한다.
+    """
+
+    def setUp(self):
+        self._original_key = os.environ.get("TAVILY_API_KEY")
+        os.environ["TAVILY_API_KEY"] = "test-key"
+        self._original_domains = os.environ.get("TAVILY_TRUSTED_DOMAINS")
+        os.environ.pop("TAVILY_TRUSTED_DOMAINS", None)
+
+    def tearDown(self):
+        if self._original_key is None:
+            os.environ.pop("TAVILY_API_KEY", None)
+        else:
+            os.environ["TAVILY_API_KEY"] = self._original_key
+        if self._original_domains is None:
+            os.environ.pop("TAVILY_TRUSTED_DOMAINS", None)
+        else:
+            os.environ["TAVILY_TRUSTED_DOMAINS"] = self._original_domains
+
+    @patch("app.services.retrieval.tavily_search.TavilyClient")
+    def test_profile_query_without_time_marker_still_fetches_recent_news(
+        self, mock_client_cls
+    ):
+        # "이강인 선수에 대해 알려줘"에는 "최근"/"최신"/"오늘" 같은 시점
+        # 표현이 없다 - time_range=None으로 호출돼도(freshness="NONE") 최근
+        # 뉴스 보조 검색은 그대로 나가야 한다.
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "results": [{"title": "이강인", "url": "u", "content": "c"}]
+        }
+        mock_client_cls.return_value = mock_client
+
+        search_web(
+            "이강인 선수에 대해 알려줘", max_results=3, time_range=None
+        )
+
+        self.assertEqual(mock_client.search.call_count, 2)
+
+        news_kwargs = mock_client.search.call_args_list[1].kwargs
+        self.assertEqual(news_kwargs["topic"], "news")
+        self.assertEqual(news_kwargs["time_range"], "week")
+        self.assertEqual(
+            news_kwargs["include_domains"],
+            ["news.naver.com", "ytn.co.kr", "imnews.imbc.com"],
+        )
+
+    @patch("app.services.retrieval.tavily_search.TavilyClient")
+    def test_recent_news_result_is_merged_into_profile_results(
+        self, mock_client_cls
+    ):
+        mock_client = MagicMock()
+        mock_client.search.side_effect = [
+            {
+                "results": [
+                    {"title": "이강인 - 나무위키", "url": "wiki-u", "content": "c1"},
+                ]
+            },
+            {
+                "results": [
+                    {"title": "이강인 이적 소식", "url": "news-u", "content": "c2"},
+                ]
+            },
+        ]
+        mock_client_cls.return_value = mock_client
+
+        results = search_web("이강인 선수에 대해 알려줘", max_results=3)
+
+        self.assertEqual(
+            results,
+            [
+                {"title": "이강인 - 나무위키", "url": "wiki-u", "content": "c1"},
+                {"title": "이강인 이적 소식", "url": "news-u", "content": "c2"},
+            ],
+        )
+
+    @patch("app.services.retrieval.tavily_search.TavilyClient")
+    def test_duplicate_url_from_recent_news_is_not_added_twice(
+        self, mock_client_cls
+    ):
+        # 위키/나무위키 검색에서 이미 신뢰 뉴스 도메인 기사가 잡혔다면
+        # (_profile_domains가 신뢰 뉴스 도메인도 항상 함께 후보에 넣으므로),
+        # 보조 뉴스 검색이 같은 URL을 다시 찾아와도 중복으로 추가하지
+        # 않는다.
+        mock_client = MagicMock()
+        mock_client.search.side_effect = [
+            {
+                "results": [
+                    {"title": "이강인 이적 소식", "url": "news-u", "content": "c1"},
+                ]
+            },
+            {
+                "results": [
+                    {"title": "이강인 이적 소식", "url": "news-u", "content": "c1"},
+                ]
+            },
+        ]
+        mock_client_cls.return_value = mock_client
+
+        results = search_web("이강인 선수에 대해 알려줘", max_results=3)
+
+        self.assertEqual(
+            results,
+            [{"title": "이강인 이적 소식", "url": "news-u", "content": "c1"}],
+        )
+
+    @patch("app.services.retrieval.tavily_search.TavilyClient")
+    def test_recent_news_supplement_failure_does_not_break_profile_results(
+        self, mock_client_cls
+    ):
+        # 보조 검색은 어디까지나 보조이므로, Tavily 호출 자체가 실패해도
+        # 기본 프로필 결과(위키/나무위키)는 그대로 반환돼야 한다.
+        mock_client = MagicMock()
+        mock_client.search.side_effect = [
+            {
+                "results": [
+                    {"title": "이강인 - 나무위키", "url": "wiki-u", "content": "c1"},
+                ]
+            },
+            RuntimeError("tavily timeout"),
+        ]
+        mock_client_cls.return_value = mock_client
+
+        results = search_web("이강인 선수에 대해 알려줘", max_results=3)
+
+        self.assertEqual(
+            results,
+            [{"title": "이강인 - 나무위키", "url": "wiki-u", "content": "c1"}],
+        )
 
 
 class NonMusicSportsProfileDomainsTest(unittest.TestCase):
@@ -663,7 +822,9 @@ class NonMusicSportsProfileDomainsTest(unittest.TestCase):
 
         search_web("어느 유튜버의 프로필을 알려줘", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(
             kwargs["include_domains"],
             ["ko.wikipedia.org", "namu.wiki", "news.naver.com", "ytn.co.kr", "imnews.imbc.com"],
@@ -681,7 +842,9 @@ class NonMusicSportsProfileDomainsTest(unittest.TestCase):
 
         search_web("어느 정치인의 약력을 알려줘", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertNotIn("grammy.com", kwargs["include_domains"])
         self.assertNotIn("olympics.com", kwargs["include_domains"])
         self.assertIn("ko.wikipedia.org", kwargs["include_domains"])
@@ -701,7 +864,9 @@ class NonMusicSportsProfileDomainsTest(unittest.TestCase):
 
         search_web("이강인 소속과 프로필을 알려줘", max_results=3)
 
-        _, kwargs = mock_client.search.call_args
+        # 2026-09-02: PROFILE 경로의 최근 뉴스 보조 검색(마지막 호출)이 아닌
+        # 기본 프로필 도메인 검색(첫 번째 호출)을 확인한다.
+        _, kwargs = mock_client.search.call_args_list[0]
         self.assertEqual(
             kwargs["include_domains"],
             [

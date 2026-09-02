@@ -186,6 +186,55 @@ def _all_low_relevance(results: list) -> bool:
     return bool(results) and all(_has_low_relevance_score(r) for r in results)
 
 
+# 2026-09-02: "이강인 선수에 대해 알려줘"처럼 "최근"/"최신"/"오늘" 같은 시점
+# 표현이 전혀 없는 프로필 질의에서도 소속팀 같은 시간에 따라 바뀌는 사실이
+# 최신 정보를 못 따라가는 사례가 확인됨. search_plan.py는 이런 질의를
+# freshness="NONE"으로 분류하고(시점 표현이 없으므로), 그러면 이 PROFILE
+# 경로는 time_range 없이 위키백과/나무위키 + 신뢰뉴스 도메인을 topic="general"로
+# 한 번만 찾는다 - 위키백과/나무위키 문서가 이적을 아직 반영하지 못한
+# 스냅샷이면 그게 그대로 답이 된다. 프로필 요청은 "지금 이 사람이 어디
+# 소속인지"를 다루는 이상 본질적으로 신선도가 중요하므로, 사용자가 "최근"을
+# 안 썼어도 최근 1주일 이내 뉴스를 보조로 함께 가져와 후보에 섞는다 -
+# 위키/나무위키 검색 자체는 그대로 두고(기본 프로필 정보는 여전히 필요),
+# 소속 변경처럼 최신 보도로만 확인되는 사실을 놓치지 않기 위함이다.
+def _fetch_recent_profile_news(client, query, max_results):
+    try:
+        return _run_search(
+            client, query, max_results,
+            topic="news",
+            include_domains=_trusted_domains(),
+            time_range="week",
+        )
+    except Exception:
+        # 보조 검색이므로 실패해도 기본 프로필 결과(위키/나무위키)는
+        # 그대로 반환해야 한다 - 여기서 예외가 나서 프로필 조회 전체가
+        # 실패하면 안 된다.
+        return []
+
+
+def _merge_unique_by_url(primary: list, extra: list) -> list:
+    seen_urls = {
+        item.get("url")
+        for item in primary
+        if item.get("url")
+    }
+
+    merged = list(primary)
+
+    for item in extra:
+        url = item.get("url")
+
+        if url and url in seen_urls:
+            continue
+
+        if url:
+            seen_urls.add(url)
+
+        merged.append(item)
+
+    return merged
+
+
 def _run_search(client, query, max_results, topic, include_domains, time_range=None):
     search_kwargs = dict(
         query=query,
@@ -279,7 +328,16 @@ def search_web(
                 time_range=time_range,
             )
 
-        return results
+        # 위 _fetch_recent_profile_news 주석 참고 - "최근" 표현이 없는
+        # 프로필 질의도 소속 변경 등 최신 사실을 놓치지 않도록 최근 1주일
+        # 뉴스를 보조로 가져와 합친다. URL이 겹치는 항목(위키/나무위키
+        # 검색에서 신뢰뉴스 도메인 결과가 이미 잡힌 경우)은 중복으로 다시
+        # 넣지 않는다.
+        recent_news = _fetch_recent_profile_news(
+            client, query, max_results
+        )
+
+        return _merge_unique_by_url(results, recent_news)
 
     # 2026-08-25(원 커밋): 스포츠 경기 결과처럼 시간에 민감한 질의에서
     # "프리뷰/예측" 기사가 "결과" 기사보다 검색어와 더 유사하다는 이유로
