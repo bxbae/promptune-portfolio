@@ -134,6 +134,25 @@ class BuildSystemPromptRelevanceRulesTest(unittest.TestCase):
         prompt = self._prompt([])
         self.assertIn("빠짐없이 반영하라", prompt)
 
+    def test_profile_overview_does_not_duplicate_basic_profile_facts(self):
+        # 2026-09-02: "이강인 선수" 프로필 답변에서 '개요'와 '기본 프로필' 둘 다
+        # 이름/생년월일/출신지를 그대로 반복해서 답이 불필요하게 길어지는
+        # 사례가 확인됨 - 두 섹션이 같은 사실을 중복해서 담지 않도록
+        # 명시해야 한다.
+        prompt = self._prompt([])
+        self.assertIn("여기서 반복하지 말고 '기본 프로필'에서만 다뤄라", prompt)
+        self.assertIn("섹션 간에 같은 사실을 중복해서 다시 쓰지 마라", prompt)
+
+    def test_includes_career_date_conflict_dedup_rule(self):
+        # 2026-09-02: "이강인 선수" 프로필의 '경력' 항목에 같은 소속(발렌시아
+        # CF)이 "2019-2020 시즌, 2020-2021 시즌, 2018-2019 시즌"처럼 서로
+        # 다른 연도 범위로 여러 줄 중복 표기되는 사례가 확인됨 - 참고자료마다
+        # 다른 연도가 나올 때 이를 하나로 정리하고, 불확실하면 연도를 생략하라고
+        # 명시해야 한다.
+        prompt = self._prompt([])
+        self.assertIn("같은 소속을 여러 줄로 중복해서 적지 마라", prompt)
+        self.assertIn("그 소속의 연도는 생략하고 소속명만 적어라", prompt)
+
     def test_includes_inline_citation_rule(self):
         # 2026-08-26: 프로필 답변에 출처가 "출처 더보기" 목록에만 붙고,
         # 어느 항목이 어느 출처에서 나온 사실인지 본문에서는 알 수 없는
