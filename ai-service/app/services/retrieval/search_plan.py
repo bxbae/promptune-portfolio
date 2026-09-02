@@ -74,6 +74,28 @@ _TODAY_MARKERS = (
     "방금",
 )
 
+
+# 2026-09-02: entity 추출(_extract_search_subject / extract_external_entity_subject)은
+# 질의 전체가 "^...$" 앵커에 맞는 짧은 단일 문장일 때만 성공한다. PrompTune UI가
+# CONTEXT 추천문구(예: "이강인 선수는 뛰어난 드리블 능력과 패스 능력으로 주목받고
+# 있는 젊은 축구 선수입니다")를 덧붙이면 질의가 여러 문장으로 늘어나 entity 추출이
+# 항상 실패하고, 그 결과 이 파일이 intent=GENERAL로 잘못 분류해 tavily_search.py의
+# 프로필 도메인(위키백과/나무위키/올림픽/그래미) 라우팅이 아예 시도되지 않는 사례
+# ("이강인 선수에 대해 알려줘 ... 소속 클럽과 약력을 안내해줘" 질의가 완전히 무관한
+# 해외 스포츠 기사만 근거로 잡힘)가 확인됨.
+#
+# tavily_search.py에는 이미 동일한 목적의 _PROFILE_MARKERS/_is_profile_query가
+# 있지만, retrieval_orchestrator.py가 항상 이 함수의 intent를 search_web()에
+# 넘기기 때문에(search_intent가 절대 비어있지 않음) 그쪽 마커 검사는 프로덕션에서
+# 사실상 도달 불가능한 코드가 되어 있었다(단위 테스트는 search_web()을 intent 없이
+# 직접 호출해서 통과해왔음). entity 추출 성공 여부와 무관하게 질의 텍스트에 인물
+# 마커가 있으면 PROFILE로 분류되도록 여기서 직접 판정한다.
+_PROFILE_MARKERS = (
+    "프로필", "약력", "소속", "선수", "감독", "가수", "배우", "인물",
+    "유튜버", "단장", "코치", "아이돌", "뮤지션",
+    "정치인", "인플루언서", "크리에이터", "코미디언", "국회의원",
+)
+
 _RESEARCH_MARKERS = (
     "기여",
     "영향",
@@ -215,6 +237,18 @@ def build_search_plan(query: str) -> SearchPlan:
         )
 
     if entity is not None:
+        return SearchPlan(
+            query=text,
+            intent="PROFILE",
+            entity=entity,
+            freshness=freshness,
+        )
+
+    # entity 정규식 추출이 실패해도(예: 위 CONTEXT 문구 삽입으로 다문장이 된
+    # 경우) 인물 마커가 있으면 PROFILE로 분류한다 - entity는 None으로 남지만
+    # tavily_search.py의 _profile_domains()는 entity가 아니라 query 텍스트
+    # 자체로 도메인을 고르므로 문제 없다.
+    if any(marker in lowered for marker in _PROFILE_MARKERS):
         return SearchPlan(
             query=text,
             intent="PROFILE",
