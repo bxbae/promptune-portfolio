@@ -70,6 +70,12 @@ spring:
 ai:
   service:
     url: ${AI_SERVICE_URL:http://localhost:8000}
+  mock:
+    # true면 AiServiceClient가 실제 ai-service(AI_SERVICE_URL)를 호출하지 않고
+    # mock-scenarios.json에 준비된 시나리오로 즉시 응답한다.
+    # promptune-portfolio(데모/목업)의 Render 백엔드 서비스에서만
+    # AI_MOCK_ENABLED=true로 켤 것 - 실제 운영(promptune)에는 절대 켜지 말 것.
+    enabled: ${AI_MOCK_ENABLED:false}
 
 app:
   aws:

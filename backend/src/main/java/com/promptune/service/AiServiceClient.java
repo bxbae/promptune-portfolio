@@ -4,6 +4,8 @@ import com.promptune.dto.PipelineDtos.DiagnoseResult;
 import com.promptune.dto.PipelineDtos.ImprovePromptResult;
 import com.promptune.dto.PipelineDtos.PromptRuleResult;
 import com.promptune.dto.PipelineDtos.SuggestResult;
+import com.promptune.dto.PipelineDtos.SuggestionAnchor;
+import com.promptune.dto.PipelineDtos.SuggestionItem;
 import com.promptune.domain.ModelUsageLog;
 import com.promptune.repository.ModelUsageLogRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +34,20 @@ public class AiServiceClient {
     @Autowired
     private ModelUsageLogRepository logRepository;
 
+    // promptune-portfolio(데모 사이트) 전용 스위치. true면 아래 5개 메서드
+    // (diagnose/suggest/retrievalExecute/generate/validate)가 실제
+    // ai-service(AI_SERVICE_URL)를 호출하는 대신 demo-scenarios.json에서 찾은
+    // 시나리오로 즉시 응답한다. Render의 promptune-portfolio 백엔드 서비스에서만
+    // AI_DEMO_ENABLED=true로 켠다 - 실제 운영(promptune)에는 켜지 않는다.
+    //
+    // 주의: docs/MOCK_GUIDE.md의 "mock"(나중에 실제 모델로 교체할 임시 구현)과는
+    // 다른 개념이라 일부러 "mock"이 아닌 "demo"로 이름 붙였다.
+    @Value("${ai.demo.enabled:false}")
+    private boolean demoEnabled;
+
+    @Autowired
+    private DemoScenarioService demoScenarioService;
+
     public AiServiceClient(@Value("${ai.service.url:http://localhost:8000}") String baseUrl) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -46,6 +62,12 @@ public class AiServiceClient {
     }
 
     public DiagnoseResult diagnose(String text) {
+        if (demoEnabled) {
+            return demoScenarioService.findBestMatch(text)
+                    .map(this::toDiagnoseResult)
+                    .orElseGet(this::fallbackDiagnoseResult);
+        }
+
         long start = System.currentTimeMillis();
         try {
             DiagnoseResult result = client.post()
@@ -65,6 +87,12 @@ public class AiServiceClient {
     public SuggestResult suggest(
             String text,
             List<String> targetElements) {
+        if (demoEnabled) {
+            return demoScenarioService.findBestMatch(text)
+                    .map(this::toSuggestResult)
+                    .orElseGet(() -> new SuggestResult(List.of()));
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -284,6 +312,12 @@ public class AiServiceClient {
             boolean useWebSearch,
             Map<String, String> routingUserContext) {
 
+        if (demoEnabled) {
+            return demoScenarioService.findBestMatch(query)
+                    .map(this::toRetrievalExecuteResult)
+                    .orElseGet(this::fallbackRetrievalExecuteResult);
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -376,6 +410,12 @@ public class AiServiceClient {
             Map<String, String> userContext,
             Map<String, String> preference,
             List<Map<String, String>> history) {
+        if (demoEnabled) {
+            return demoScenarioService.findBestMatch(prompt)
+                    .map(this::toGenerateResult)
+                    .orElseGet(this::fallbackGenerateResult);
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -603,6 +643,16 @@ public class AiServiceClient {
             List<Map<String, Object>> documents,
             List<Map<String, Object>> webResults) {
 
+        if (demoEnabled) {
+            // 데모 모드에서는 항상 통과 처리한다. 시나리오 답변은 이미 검증된
+            // 고정 텍스트이므로, 여기서 통과시키지 않으면 validateWithRetry()가
+            // 불필요하게 재생성을 시도하게 된다.
+            Map<String, Object> passed = new java.util.HashMap<>();
+            passed.put("passed", true);
+            passed.put("issues", null);
+            return passed;
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -660,6 +710,16 @@ public class AiServiceClient {
     }
 
     public String summarizeTitle(String text) {
+        if (demoEnabled) {
+            // 채팅 목록에 쓸 제목이라 굳이 시나리오 매칭 없이, 원문 앞부분을
+            // 그대로 잘라서 쓴다 (ai-service 호출 없이 즉시 반환).
+            if (text == null || text.isBlank()) {
+                return null;
+            }
+            String trimmed = text.strip();
+            return trimmed.length() > 20 ? trimmed.substring(0, 20) + "…" : trimmed;
+        }
+
         long start = System.currentTimeMillis();
         try {
             Map result = client.post()
@@ -674,6 +734,75 @@ public class AiServiceClient {
             log("ai-service", "/api/ai/summarize-title", start, "error");
             return null; // 실패해도 전체 흐름은 안 끊기게, null 반환
         }
+    }
+
+    // ── 아래는 데모 모드 전용 변환/기본값 헬퍼 ─────────────────────────────
+
+    private DiagnoseResult toDiagnoseResult(DemoScenario scenario) {
+        DemoScenario.DiagnoseFields d =
+                scenario.diagnose != null ? scenario.diagnose : new DemoScenario.DiagnoseFields();
+        return new DiagnoseResult(
+                d.missing == null ? Map.of() : d.missing,
+                d.taskType == null ? "chat" : d.taskType,
+                d.typos == null ? List.of() : d.typos,
+                d.needsInternalDocs);
+    }
+
+    private DiagnoseResult fallbackDiagnoseResult() {
+        return new DiagnoseResult(Map.of(), "chat", List.of(), false);
+    }
+
+    private SuggestResult toSuggestResult(DemoScenario scenario) {
+        if (scenario.suggestions == null || scenario.suggestions.isEmpty()) {
+            return new SuggestResult(List.of());
+        }
+        List<SuggestionItem> items = scenario.suggestions.stream()
+                .map(s -> new SuggestionItem(
+                        s.element,
+                        s.primary,
+                        s.alternatives == null ? List.of() : s.alternatives,
+                        new SuggestionAnchor(s.sentenceIndex, s.charOffset)))
+                .toList();
+        return new SuggestResult(items);
+    }
+
+    private Map<String, Object> toRetrievalExecuteResult(DemoScenario scenario) {
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("documents", List.of()); // 데모는 내부 문서 검색을 다루지 않음(항상 빈 목록)
+        result.put(
+                "web_results",
+                scenario.webResults == null
+                        ? List.of()
+                        : scenario.webResults);
+        return result;
+    }
+
+    private Map<String, Object> fallbackRetrievalExecuteResult() {
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("documents", List.of());
+        result.put("web_results", List.of());
+        return result;
+    }
+
+    private Map<String, Object> toGenerateResult(DemoScenario scenario) {
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put(
+                "result",
+                scenario.generatedAnswer == null
+                        ? fallbackAnswerText()
+                        : scenario.generatedAnswer);
+        return result;
+    }
+
+    private Map<String, Object> fallbackGenerateResult() {
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("result", fallbackAnswerText());
+        return result;
+    }
+
+    private String fallbackAnswerText() {
+        return "이 데모는 미리 준비된 질문에 대해서만 답변할 수 있어요. "
+                + "다른 질문도 궁금하시다면 담당 팀에 문의해 주세요.";
     }
 
     private void log(String provider, String endpoint, long startTime, String status) {
