@@ -431,22 +431,20 @@ export default function ChatThreadPage() {
   ) {
     setIsGenerating(true);
     
-    // 생성 전에 미리 수신자 감지 - 이미 저장된 프로필과 이름이 일치하면 그 톤을 생성에 반영
+    // 생성 전에 미리 수신자 감지 - 선택된 수신자 프로필이 있으면 우선 사용하고,
+    // 없으면 프롬프트에서 감지된 수신자 이름으로 저장된 프로필을 찾아 그 톤을 생성에 반영
     const detectedBeforeGen = detectReceiverName(prompt);
-    const matchedProfile = detectedBeforeGen
-      ? receiverProfiles.find((p) => p.receiverName === detectedBeforeGen)
-      : undefined;
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    // 생성 전에 미리 수신자 감지 - 이미 저장된 프로필과 이름이 일치하면 그 톤을 생성에 반영
     const matchedProfile =
       selectedReceiverProfileId !== null
         ? receiverProfiles.find(
             (profile) => profile.id === selectedReceiverProfileId,
           )
-        : undefined;
+        : detectedBeforeGen
+          ? receiverProfiles.find((p) => p.receiverName === detectedBeforeGen)
+          : undefined;
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const documentIds = attachments.map((a) => a.id);
@@ -730,12 +728,6 @@ export default function ChatThreadPage() {
                     </button>
                   )}
                     </div>
-                    <div className="msg-bubble user">{m.content}</div>
-                  </div>
-                </div>
-                    <div className="msg-bubble user">{m.content}</div>
-                  </div>
-                </div>
                     <div className="msg-bubble user">{m.content}</div>
                   </div>
                 </div>
