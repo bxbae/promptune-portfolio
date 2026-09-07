@@ -417,9 +417,17 @@ public class AiServiceClient {
             Map<String, String> preference,
             List<Map<String, String>> history) {
         if (demoEnabled) {
+            // 2026-09-07: 큐레이션된 demo-scenarios.json 매칭에 걸리지 않는
+            // 표현("성과관리 실적보고서.pptx 양식 보내줘"처럼 시나리오
+            // matchQuestions와 문자 유사도가 낮은 문장)이어도, 사용자가 원래
+            // 문장에 "성과관리/실적보고", "주간"+"업무보고", "일일"+"업무보고"를
+            // 실제로 언급했다면 그냥 "준비된 질문만 답할 수 있어요" 안내문만
+            // 보내지 말고 실제 서식 파일을 같이 붙여준다 - 안 그러면 사용자는
+            // 파일 대신 제목 없는 빈 목업 문서만 받게 된다("PrompTune 생성
+            // 문서.pdf" 버그).
             return demoScenarioService.findBestMatch(prompt)
                     .map(this::toGenerateResult)
-                    .orElseGet(this::fallbackGenerateResult);
+                    .orElseGet(() -> fallbackGenerateResult(prompt));
         }
 
         long start = System.currentTimeMillis();
@@ -1324,9 +1332,18 @@ public class AiServiceClient {
         return result;
     }
 
-    private Map<String, Object> fallbackGenerateResult() {
+    private Map<String, Object> fallbackGenerateResult(String prompt) {
         Map<String, Object> result = new java.util.HashMap<>();
         result.put("result", fallbackAnswerText());
+
+        String templateKey = resolveDemoTemplateKey(null, prompt);
+        if (templateKey != null) {
+            result.put("templateFile", templateKey);
+            result.put(
+                    "templateFileName",
+                    DEMO_TEMPLATE_FILES.get(templateKey).displayName());
+        }
+
         return result;
     }
 
