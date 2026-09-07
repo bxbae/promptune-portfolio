@@ -11,19 +11,25 @@ export default function AuthForm({ onSuccess }: { onSuccess: (name: string) => v
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [wakingUp, setWakingUp] = useState(false);
 
   async function handleSubmit() {
-    setError(""); setLoading(true);
+    setError(""); setLoading(true); setWakingUp(false);
+    // 데모 서버(Render 무료 플랜)는 잠시 방치되면 슬립 상태에 들어가고,
+    // 다시 깨어나는 데 최대 2분 정도 걸릴 수 있다. 그 사이엔 자동으로
+    // 재시도하면서 이 배너로 상황을 알려준다 (진짜 오류는 즉시 표시됨).
+    const onWaking = () => setWakingUp(true);
     try {
       const res = mode === "login"
-        ? await login(email, password)
-        : await signup(email, password, name);
+        ? await login(email, password, onWaking)
+        : await signup(email, password, name, onWaking);
       saveToken(res.token);
       onSuccess(res.name || res.email);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
+      setWakingUp(false);
     }
   }
 
@@ -47,10 +53,15 @@ export default function AuthForm({ onSuccess }: { onSuccess: (name: string) => v
         onChange={(e) => setPassword(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }} />
 
+      {wakingUp && (
+        <div className="auth-waking">
+          서버를 깨우는 중이에요. 첫 접속 시 최대 2분 정도 걸릴 수 있어요 — 잠시만 기다려 주세요.
+        </div>
+      )}
       {error && <div className="auth-error">{error}</div>}
 
       <button className="auth-submit" onClick={handleSubmit} disabled={loading}>
-        {loading ? "처리 중…" : mode === "login" ? "로그인" : "가입하기"}
+        {loading ? (wakingUp ? "서버 깨우는 중…" : "처리 중…") : mode === "login" ? "로그인" : "가입하기"}
       </button>
 
       <div className="auth-divider">또는</div>

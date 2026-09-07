@@ -243,6 +243,7 @@ white-space:nowrap으로 줄바꿈(세로 나열) 자체를 막아둠. */
 .auth input { padding: 12px 14px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; font-size: 15px; }
 .auth input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .auth-error { color: var(--block); font-size: 13px; }
+.auth-waking { color: var(--muted); font-size: 13px; background: var(--accent-tint); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; line-height: 1.4; }
 .auth-submit { padding: 12px; background: var(--accent); color: #ffffff; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; font-size: 15px; margin-top: 4px; }
 .auth-submit:disabled { opacity: 0.6; cursor: default; }
 .auth-divider { text-align: center; color: var(--muted); font-size: 13px; margin: 8px 0; font-family: var(--mono); }
