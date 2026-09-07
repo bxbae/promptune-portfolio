@@ -46,6 +46,11 @@ public class DocumentIntentResolver {
             "^(응|ㅇㅇ+|네|예|그래|좋아|맞아|그렇게\\s*해줘|해줘|그걸로\\s*해줘|이걸로\\s*해줘)[.!?~\\s]*$",
             Pattern.CASE_INSENSITIVE);
 
+    // detectTitle()이 어떤 구체적인 보고서 종류도 못 찾았을 때 쓰는 폴백 제목.
+    // resolve()에서 "현재 발화에 구체적인 문서 종류가 있는지" 판단할 때도
+    // 재사용한다(중복 문자열 방지).
+    private static final String FALLBACK_TITLE = "PrompTune 생성 문서";
+
     public Optional<DocumentAction> resolve(
             String currentPrompt,
             List<Map<String, String>> history) {
@@ -66,10 +71,22 @@ public class DocumentIntentResolver {
         boolean directDocumentRequest =
                 hasCreateVerb && (hasDocumentNoun || hasFileNoun);
 
+        // 2026-09-07: "이 문서 파일로 만들어줘", "위 내용 문서로 만들어줘"처럼
+        // DOCUMENT_NOUN이 있어도 "문서/양식/템플릿" 같은 범용 단어뿐이고 실제
+        // 보고서 종류(업무보고서/성과관리 실적보고서 등)를 이번 발화에서 다시
+        // 언급하지 않는 경우가 있다. 예전에는 hasDocumentNoun이 true라는
+        // 이유만으로 directDocumentRequest의 "현재 발화만 보는" 분기로 빠져서
+        // 직전 대화 맥락을 완전히 무시했고, 그 결과 제목/서식을 못 찾아 제목
+        // 없는 "PrompTune 생성 문서" 목업이 나갔다. 현재 발화 자체에 구체적인
+        // 문서 종류가 없으면(=detectTitle이 폴백 제목을 줄 것이면) FILE_NOUN만
+        // 있을 때와 마찬가지로 직전 대화 맥락(contextualFileRequest)을 쓴다.
+        boolean currentHasSpecificTitleHint =
+                !FALLBACK_TITLE.equals(detectTitle(current, ""));
+
         boolean contextualFileRequest =
                 hasCreateVerb
-                        && hasFileNoun
-                        && !hasDocumentNoun
+                        && (hasFileNoun || hasDocumentNoun)
+                        && !currentHasSpecificTitleHint
                         && !previousAssistant.isBlank();
 
         boolean typeOnlyFollowup =
@@ -194,7 +211,7 @@ public class DocumentIntentResolver {
         if (containsAny(text, "공지문")) return "공지문";
         if (containsAny(text, "안내문")) return "안내문";
 
-        return "PrompTune 생성 문서";
+        return FALLBACK_TITLE;
     }
 
     private String detectFormat(

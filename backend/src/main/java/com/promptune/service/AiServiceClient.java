@@ -895,6 +895,26 @@ public class AiServiceClient {
         return mentionsDaily ? "daily-report" : null;
     }
 
+    // 2026-09-07: resolveDemoTemplateKey()는 "업무보고"/"성과관리" 같은
+    // 정확한 키워드가 문자 그대로 들어있어야만 찾는다. 그런데
+    // DocumentIntentResolver가 직전 대화 맥락 없이 현재 발화만으로 문서 생성
+    // 의도를 판단하는 경우("이 문서 파일로 만들어줘"처럼 구체적인 보고서
+    // 종류를 이번 발화에 다시 안 적는 경우) content에 그 키워드 자체가 아예
+    // 없을 수 있다. 그럴 때 demo-scenarios.json의 matchQuestions와 문자
+    // 유사도로 대충 비슷한 시나리오를 찾아(DemoScenarioService, ai.generate()가
+    // 쓰는 것과 같은 로직) 그 시나리오에 연결된 templateFile을 2차 안전장치로
+    // 쓴다. resolveDemoTemplateKey()가 이미 찾았으면 이 메서드는 호출할
+    // 필요가 없다 - PipelineController.applyDemoTemplateCorrection 참고.
+    public String resolveDemoTemplateKeyViaScenario(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        return demoScenarioService.findBestMatch(text)
+                .map(scenario -> scenario.templateFile)
+                .filter(key -> key != null && DEMO_TEMPLATE_FILES.containsKey(key))
+                .orElse(null);
+    }
+
     public boolean isDemoEnabled() {
         return demoEnabled;
     }

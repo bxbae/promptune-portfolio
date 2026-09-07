@@ -645,6 +645,15 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
 
         String templateKey = ai.resolveDemoTemplateKey(title, content);
         if (templateKey == null) {
+            // 2026-09-07: 위 키워드 매칭이 실패해도(예: 직전 대화 맥락 없이
+            // "이 문서 파일로 만들어줘"처럼 이번 발화에 구체적인 보고서
+            // 종류가 안 적힌 경우) content에는 여전히 그 맥락이 녹아있을 수
+            // 있으므로, demo-scenarios.json 문자 유사도 매칭으로 한 번 더
+            // 시도한다("PrompTune 생성 문서" 목업이 반복 재발하는 문제의
+            // 2차 안전장치 - AiServiceClient.resolveDemoTemplateKeyViaScenario).
+            templateKey = ai.resolveDemoTemplateKeyViaScenario(content);
+        }
+        if (templateKey == null) {
             return;
         }
 
