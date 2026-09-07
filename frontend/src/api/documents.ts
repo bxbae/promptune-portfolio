@@ -159,12 +159,51 @@ export async function deleteDocument(id: number): Promise<void> {
 }
 export type DocumentFormat = "docx" | "pdf";
 
+// 서버가 Content-Disposition으로 내려준 실제 파일명을 읽어온다. 데모 모드에서는
+// 백엔드가 요청받은 format을 무시하고 실제 원본 서식 파일(예: 일일업무보고
+// 원본 docx)로 바꿔치기하는 경우가 있어서(AiServiceClient.tryDemoTemplateOverride),
+// 클라이언트가 title/format으로 지레짐작한 파일명을 그대로 쓰면 확장자가
+// 실제 내용과 안 맞을 수 있다 - 항상 서버가 알려준 이름을 우선한다.
+// (SecurityConfig에서 CORS exposedHeaders에 Content-Disposition을 추가해둬야
+// 브라우저가 이 헤더를 fetch()로 읽을 수 있다.)
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+
+  const rfc5987 = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (rfc5987) {
+    try {
+      return decodeURIComponent(rfc5987[1]);
+    } catch {
+      // 디코딩 실패 시 아래 일반 filename="..." 폴백으로 넘어감
+    }
+  }
+
+  const plain = header.match(/filename="([^"]+)"/i);
+  return plain ? plain[1] : null;
+}
+
+export function guessDocumentFormat(
+  fileName: string | null,
+  fallback: DocumentFormat,
+): DocumentFormat {
+  if (!fileName) return fallback;
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  return ext === "docx" || ext === "pdf" ? ext : fallback;
+}
+
+export interface GeneratedDocumentFile {
+  blob: Blob;
+  // 서버가 실제로 내려준 파일명. Content-Disposition이 없거나 파싱 실패하면 null
+  // (호출부가 title/format으로 폴백해야 함).
+  fileName: string | null;
+}
+
 export async function generateDocumentFile(
   title: string,
   content: string,
   format: DocumentFormat,
   templateDocumentId?: number,
-): Promise<Blob> {
+): Promise<GeneratedDocumentFile> {
   const res = await fetch(`${API}/api/documents/generate`, {
     method: "POST",
     headers: {
@@ -186,7 +225,8 @@ export async function generateDocumentFile(
     );
   }
 
-  return res.blob();
+  const fileName = parseContentDispositionFilename(res.headers.get("Content-Disposition"));
+  return { blob: await res.blob(), fileName };
 }
 
 // 데모 전용: AI가 새로 만든 문서가 아니라, 실제 회사 서식 원본을 그대로

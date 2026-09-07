@@ -52,6 +52,13 @@ public class SecurityConfig {
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
 
+        // 2026-09-07: /api/documents/generate, /api/documents/demo-template/{key}가
+        // 실제로 만든 파일명을 Content-Disposition 헤더로 내려주는데, CORS 기본
+        // 정책상 브라우저가 노출 안 시킨 응답 헤더는 fetch()의 res.headers에서
+        // 아예 안 읽힌다 (401/403이 아니라 조용히 null). 프론트가 서버가 정한
+        // 실제 파일명/확장자를 신뢰할 수 있게 명시적으로 노출한다.
+        config.setExposedHeaders(List.of("Content-Disposition"));
+
         // 2026-08-27: MS 연동(OAuth) 콜백에서 "Invalid CORS request"가 그대로
         // 응답 본문에 노출되는 오류가 확인됨. MicrosoftGraphService.createAuthorizationUrl()이
         // ResponseMode.FORM_POST를 쓰기 때문에, 로그인 완료 후 Microsoft가 렌더링하는

@@ -9,7 +9,7 @@ import { suggestToneFromJobTitle } from "@/lib/toneMapping";
 import { grantConsent, getConsentStatus } from "@/api/consents";
 import { submitPromptSessionEdit } from "@/api/promptSessions";
 import PromptEditor, { DirectEdit } from "@/components/PromptEditor";
-import { generateDocumentFile, fetchDemoTemplateFile, type DocumentFormat, type DocumentItem } from "@/api/documents";
+import { generateDocumentFile, fetchDemoTemplateFile, guessDocumentFormat, type DocumentFormat, type DocumentItem } from "@/api/documents";
 
 interface MessageSource {
   title: string;
@@ -259,7 +259,7 @@ export default function ChatThreadPage() {
     }));
 
     try {
-      const blob = await generateDocumentFile(
+      const { blob, fileName } = await generateDocumentFile(
         title,
         m.content,
         format,
@@ -269,11 +269,16 @@ export default function ChatThreadPage() {
         title.replace(/[\\/:*?"<>|]/g, "_") ||
         "PrompTune_생성_문서";
 
+      // 서버가 실제 파일명을 알려줬으면 그걸 우선한다 (데모 모드에서 원본
+      // 서식 파일로 바꿔치기된 경우 확장자가 요청한 format과 다를 수 있음).
+      const finalFileName = fileName ?? `${safeTitle}.${format}`;
+      const finalFormat = guessDocumentFormat(fileName, format);
+
       setGeneratedDocuments((prev) => ({
         ...prev,
         [m.id]: {
-          fileName: `${safeTitle}.${format}`,
-          format,
+          fileName: finalFileName,
+          format: finalFormat,
           blob,
         },
       }));
@@ -464,17 +469,23 @@ export default function ChatThreadPage() {
 
       if (documentAction?.type === "GENERATE_DOCUMENT") {
         try {
-          const blob = await generateDocumentFile(
+          const { blob, fileName } = await generateDocumentFile(
             documentAction.title,
             documentAction.content,
             documentAction.format,
           );
 
+          // 서버가 실제 파일명을 알려줬으면 그걸 우선한다 (데모 모드에서
+          // "일일 업무보고서" 같은 요청은 AI 재생성 대신 원본 서식 파일로
+          // 바꿔치기되는데, 그 경우 확장자가 documentAction.format과 다르다).
+          const finalFileName = fileName ?? `${documentAction.title}.${documentAction.format}`;
+          const finalFormat = guessDocumentFormat(fileName, documentAction.format);
+
           setGeneratedDocuments((prev) => ({
             ...prev,
             [assistantId]: {
-              fileName: `${documentAction.title}.${documentAction.format}`,
-              format: documentAction.format,
+              fileName: finalFileName,
+              format: finalFormat,
               blob,
             },
           }));

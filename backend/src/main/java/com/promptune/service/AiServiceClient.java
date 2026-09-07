@@ -512,6 +512,10 @@ public class AiServiceClient {
         // 일반 목업 문서로 대체한다 - 어차피 실제 ai-service의 템플릿 채움
         // 로직을 그대로 흉내낼 수는 없다.
         if (demoEnabled) {
+            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content);
+            if (templateOverride != null) {
+                return templateOverride;
+            }
             return buildDemoDocumentResponse(title, content, format);
         }
 
@@ -572,6 +576,15 @@ public class AiServiceClient {
             String format) {
 
         if (demoEnabled) {
+            // DocumentIntentResolver는 "~보고서 파일로 만들어줘"류 문장이면
+            // (demo-scenarios.json 매칭 여부와 무관하게) 무조건 이 메서드로
+            // 바로 온다. "일일 업무보고서를 파일로 만들어줘"처럼 실제 사내
+            // 서식 원본이 있는 요청이면, AI가 재조립한 목업 대신 원본 파일을
+            // 내려준다 - 그래야 표/서식이 그대로 보인다.
+            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content);
+            if (templateOverride != null) {
+                return templateOverride;
+            }
             return buildDemoDocumentResponse(title, content, format);
         }
 
@@ -678,6 +691,26 @@ public class AiServiceClient {
                         org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
                         disposition.toString())
                 .body(bytes);
+    }
+
+    // DocumentIntentResolver.detectTitle()은 "~보고서"가 들어간 문장이면 거의 다
+    // (근태관리 시스템 비교 보고서든, 일일 업무보고서든) title을 그냥 "업무보고서"로
+    // 뭉뚱그려버려서 title만으로는 구분이 안 된다. "일일"이 실제로 언급된 경우만
+    // 좁혀서, 진짜 일일업무보고 요청일 때만 원본 파일로 바꿔치기한다.
+    private ResponseEntity<byte[]> tryDemoTemplateOverride(String title, String content) {
+        String haystack =
+                (title == null ? "" : title) + " " + (content == null ? "" : content);
+
+        boolean looksLikeDailyReport =
+                "업무보고서".equals(title == null ? "" : title.trim())
+                        && haystack.contains("일일")
+                        && (haystack.contains("업무보고") || haystack.contains("업무 보고"));
+
+        if (!looksLikeDailyReport) {
+            return null;
+        }
+
+        return demoTemplateFile("daily-report");
     }
 
     private ResponseEntity<byte[]> buildDemoDocumentResponse(
