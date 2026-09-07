@@ -620,6 +620,66 @@ public class AiServiceClient {
     // PDType0Font.load()는 CIDFontType2(TrueType) 경로만 확실히 지원한다.
     private static final String DEMO_KOREAN_FONT_RESOURCE = "fonts/NanumGothic-Subset.ttf";
 
+    // ── 데모 전용 "실제 원본 파일" 다운로드 ─────────────────────────────────
+    // "~보고서 파일로 만들어줘"처럼 AI가 새로 만든 문서가 아니라, 실제로
+    // 회사에서 쓰는 서식 원본을 그대로 다운로드시켜주고 싶을 때 쓴다.
+    // demo-scenarios.json의 templateFile 값(예: "daily-report")이 여기 키와
+    // 매칭되면, DocumentController#demoTemplate()가 이 파일 바이트를 그대로
+    // 내려준다. GENERATE_DOCUMENT 흐름(POI/PDFBox로 재조립)과 달리 원본
+    // 서식·표·스타일이 100% 그대로 유지된다.
+    private record DemoTemplateFile(
+            String resourcePath,
+            String displayName,
+            MediaType mediaType) {
+    }
+
+    private static final Map<String, DemoTemplateFile> DEMO_TEMPLATE_FILES = Map.of(
+            "daily-report", new DemoTemplateFile(
+                    "demo-templates/daily-report.docx",
+                    "일일 업무 보고서.docx",
+                    MediaType.parseMediaType(
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")));
+
+    public ResponseEntity<byte[]> demoTemplateFile(String key) {
+        DemoTemplateFile template = DEMO_TEMPLATE_FILES.get(key);
+
+        if (template == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "존재하지 않는 데모 템플릿입니다: " + key);
+        }
+
+        byte[] bytes;
+
+        try (java.io.InputStream in =
+                getClass().getClassLoader().getResourceAsStream(template.resourcePath())) {
+
+            if (in == null) {
+                throw new java.io.IOException(
+                        "템플릿 리소스를 찾을 수 없습니다: " + template.resourcePath());
+            }
+
+            bytes = in.readAllBytes();
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "데모 템플릿을 불러오지 못했습니다: " + e.getMessage(),
+                    e);
+        }
+
+        org.springframework.http.ContentDisposition disposition =
+                org.springframework.http.ContentDisposition.attachment()
+                        .filename(template.displayName(), java.nio.charset.StandardCharsets.UTF_8)
+                        .build();
+
+        return ResponseEntity.ok()
+                .contentType(template.mediaType())
+                .header(
+                        org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        disposition.toString())
+                .body(bytes);
+    }
+
     private ResponseEntity<byte[]> buildDemoDocumentResponse(
             String title,
             String content,
@@ -1132,6 +1192,19 @@ public class AiServiceClient {
                 scenario.generatedAnswer == null
                         ? fallbackAnswerText()
                         : scenario.generatedAnswer);
+
+        // "~파일로 만들어줘" 같은 별도 요청 없이도, 시나리오에 templateFile이
+        // 지정돼 있으면 바로 다운로드 카드가 뜨도록 키를 그대로 실어 보낸다.
+        // 실제 파일은 프론트가 GET /api/documents/demo-template/{key}로 받는다.
+        if (scenario.templateFile != null
+                && DEMO_TEMPLATE_FILES.containsKey(scenario.templateFile)) {
+
+            result.put("templateFile", scenario.templateFile);
+            result.put(
+                    "templateFileName",
+                    DEMO_TEMPLATE_FILES.get(scenario.templateFile).displayName());
+        }
+
         return result;
     }
 

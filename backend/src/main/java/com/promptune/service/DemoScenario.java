@@ -42,6 +42,13 @@ public class DemoScenario {
     @JsonProperty("generatedAnswer")
     public String generatedAnswer;
 
+    // (선택) 이 답변에 실제 원본 서식 파일을 그대로 첨부해서 보여주고 싶을 때 쓰는
+    // 키. "~파일로 만들어줘"처럼 별도 요청 없이도, 이 시나리오가 매칭되는 즉시
+    // 채팅 메시지에 다운로드 카드가 붙는다. AiServiceClient.DEMO_TEMPLATE_FILES에
+    // 등록된 키만 쓸 수 있다 (예: "daily-report").
+    @JsonProperty("templateFile")
+    public String templateFile;
+
     public static class DiagnoseFields {
         @JsonProperty("missing")
         public Map<String, Integer> missing = Map.of();

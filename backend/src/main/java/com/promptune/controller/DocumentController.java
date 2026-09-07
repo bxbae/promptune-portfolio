@@ -251,6 +251,19 @@ public class DocumentController {
                 templateFilename);
     }
 
+    // 데모 전용: AI가 새로 만든 문서가 아니라, 실제 회사 서식 원본을 그대로
+    // 다운로드시켜준다 (AiServiceClient.DEMO_TEMPLATE_FILES 참고). 로그인은
+    // 다른 문서 엔드포인트와 동일하게 요구한다.
+    @GetMapping("/demo-template/{key}")
+    public ResponseEntity<byte[]> demoTemplate(
+            @PathVariable String key,
+            Authentication authentication) {
+
+        currentUser(authentication);
+
+        return aiServiceClient.demoTemplateFile(key);
+    }
+
 
     @PostMapping("/{id}/reindex")
     public Document reindex(

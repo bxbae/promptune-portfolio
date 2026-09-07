@@ -9,7 +9,7 @@ import { suggestToneFromJobTitle } from "@/lib/toneMapping";
 import { grantConsent, getConsentStatus } from "@/api/consents";
 import { submitPromptSessionEdit } from "@/api/promptSessions";
 import PromptEditor, { DirectEdit } from "@/components/PromptEditor";
-import { generateDocumentFile, type DocumentFormat, type DocumentItem } from "@/api/documents";
+import { generateDocumentFile, fetchDemoTemplateFile, type DocumentFormat, type DocumentItem } from "@/api/documents";
 
 interface MessageSource {
   title: string;
@@ -525,6 +525,32 @@ export default function ChatThreadPage() {
           sources: Array.isArray(res?.sources) ? res.sources : undefined,
         },
       ]);
+
+      // 데모 시나리오에 templateFile이 실려 있으면, 별도 "파일로 만들어줘" 요청
+      // 없이도 바로 다운로드 카드를 붙여준다 (AI가 재생성한 문서가 아니라
+      // 실제 회사 서식 원본 그대로). 실패해도 채팅 자체는 계속되게 조용히 무시.
+      const templateFileKey = res?.result?.templateFile;
+      if (typeof templateFileKey === "string" && templateFileKey) {
+        const templateFileName =
+          typeof res?.result?.templateFileName === "string" && res.result.templateFileName
+            ? res.result.templateFileName
+            : `${templateFileKey}.docx`;
+
+        fetchDemoTemplateFile(templateFileKey)
+          .then((blob) => {
+            setGeneratedDocuments((prev) => ({
+              ...prev,
+              [assistantId]: {
+                fileName: templateFileName,
+                format: "docx",
+                blob,
+              },
+            }));
+          })
+          .catch(() => {
+            // 템플릿 조회 실패 - 텍스트 답변은 이미 나갔으니 조용히 무시
+          });
+      }
 
       // "직접 입력"으로 해결한 요소 = 직접수정. response_edits에 기록.
       // prompt_session DB컬럼 1개라 요소가 여러 개면 리스트를 못 넣음

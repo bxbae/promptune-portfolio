@@ -188,3 +188,17 @@ export async function generateDocumentFile(
 
   return res.blob();
 }
+
+// 데모 전용: AI가 새로 만든 문서가 아니라, 실제 회사 서식 원본을 그대로
+// 받아온다 (백엔드 AiServiceClient.DEMO_TEMPLATE_FILES에 등록된 key만 유효).
+export async function fetchDemoTemplateFile(key: string): Promise<Blob> {
+  const res = await fetch(`${API}/api/documents/demo-template/${encodeURIComponent(key)}`, {
+    headers: authHeaders(),
+  });
+
+  if (!res.ok) {
+    throw new Error(`템플릿 파일 조회 실패: ${res.status}`);
+  }
+
+  return res.blob();
+}
