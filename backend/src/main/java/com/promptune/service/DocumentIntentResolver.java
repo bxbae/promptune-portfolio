@@ -25,8 +25,15 @@ public class DocumentIntentResolver {
             boolean useExistingTemplate) {
     }
 
+    // 2026-09-07: "이 양식대로 나오게 해줘", "이 양식대로 나오게 고쳐줘", "양식도
+    // 받을 수 있도록 해줘"처럼 "만들어줘/작성해줘"류의 정형화된 동사 없이도
+    // 실제로는 같은 "파일로 달라"는 요청인 자연스러운 말투가 있어서 추가했다.
+    // (원래는 "나오게"/"고쳐 줘"/"받을 수 있"만으로 판단하면 문서와 무관한
+    // 요청까지 오작동할 수 있지만, 이 패턴은 항상 DOCUMENT_NOUN/FILE_NOUN이
+    // 같이 있어야만 실제로 매칭에 쓰인다 - directDocumentRequest 참고)
     private static final Pattern CREATE_VERB = Pattern.compile(
-            "(만들어(?:줘)?|생성해(?:줘)?|작성해(?:줘)?|써줘|제작해(?:줘)?)");
+            "(만들어(?:줘)?|생성해(?:줘)?|작성해(?:줘)?|써줘|제작해(?:줘)?"
+                    + "|나오게|고쳐\\s*줘|받을?\\s*수\\s*있(?:게|도록))");
 
     private static final Pattern DOCUMENT_NOUN = Pattern.compile(
             "(업무\\s*보고서|주간\\s*보고서|월간\\s*보고서|보고서|회의록|계획서|제안서|시말서|경위서|사유서|소명서|공지문|안내문|문서|양식|템플릿)");

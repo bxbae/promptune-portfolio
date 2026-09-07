@@ -625,6 +625,40 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         return history;
     }
 
+    // 2026-09-07: 데모 모드에서 AiServiceClient가 GENERATE_DOCUMENT 요청을 실제
+    // 사내 서식 원본 파일로 바꿔치기하는 경우(AiServiceClient.resolveDemoTemplateKey),
+    // 여기서 미리 documentAction.format/title을 그 서식 파일에 맞게 보정해둔다.
+    // 프론트는 서버가 실제로 내려준 Content-Disposition 파일명을 우선 쓰지만,
+    // 그 헤더를 못 읽는 상황(CORS 캐시, 프록시, 파싱 실패 등)에서는
+    // "${documentAction.title}.${documentAction.format}"로 폴백하는데, 이 값이
+    // 실제 파일 내용(예: docx)과 다른 확장자(예: pdf)로 잘못 지레짐작되면
+    // "열 수 없는 파일"이 된다("업무보고서 3.pdf" 버그의 근본 원인). 응답을 만드는
+    // 시점에 미리 보정해두면 그 폴백 경로도 항상 맞는 확장자를 쓰게 된다.
+    private void applyDemoTemplateCorrection(
+            Map<String, Object> actionPayload,
+            String title,
+            String content) {
+
+        if (!ai.isDemoEnabled()) {
+            return;
+        }
+
+        String templateKey = ai.resolveDemoTemplateKey(title, content);
+        if (templateKey == null) {
+            return;
+        }
+
+        String realFormat = ai.demoTemplateFormat(templateKey);
+        String realBaseName = ai.demoTemplateBaseName(templateKey);
+
+        if (realFormat != null) {
+            actionPayload.put("format", realFormat);
+        }
+        if (realBaseName != null) {
+            actionPayload.put("title", realBaseName);
+        }
+    }
+
     private Map<String, Object> executeDocumentAction(
             ExecuteRequest req,
             Long userId,
@@ -659,6 +693,8 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         actionPayload.put("content", action.content());
         actionPayload.put("format", action.format());
         actionPayload.put("useExistingTemplate", action.useExistingTemplate());
+
+        applyDemoTemplateCorrection(actionPayload, action.title(), action.content());
 
         Map<String, Object> resultPayload = new java.util.HashMap<>();
         resultPayload.put("result", assistantText);
@@ -710,6 +746,8 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         actionPayload.put(
                 "useExistingTemplate",
                 action.useExistingTemplate());
+
+        applyDemoTemplateCorrection(actionPayload, action.title(), groundedContent);
 
         Map<String, Object> resultPayload =
                 new java.util.HashMap<>();

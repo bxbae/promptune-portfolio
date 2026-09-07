@@ -192,10 +192,14 @@ public class DocumentController {
             }
         }
 
-        if (!List.of("docx", "pdf", "xlsx", "txt", "md").contains(format)) {
+        // pptx: 데모 모드에서 "성과관리 실적보고서" 요청이 실제 pptx 원본 파일로
+        // 바꿔치기될 때(AiServiceClient.resolveDemoTemplateKey), PipelineController가
+        // documentAction.format을 "pptx"로 미리 보정해서 내려주기 때문에 여기서도
+        // 허용해야 한다 - 안 그러면 그 보정값 자체가 이 400으로 막혀버린다.
+        if (!List.of("docx", "pdf", "xlsx", "txt", "md", "pptx").contains(format)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "지원 형식은 docx, pdf, xlsx, txt, md입니다.");
+                    "지원 형식은 docx, pdf, xlsx, txt, md, pptx입니다.");
         }
 
         if (template == null) {

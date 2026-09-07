@@ -646,12 +646,27 @@ public class AiServiceClient {
             MediaType mediaType) {
     }
 
+    private static final MediaType DOCX_MEDIA_TYPE = MediaType.parseMediaType(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+
+    private static final MediaType PPTX_MEDIA_TYPE = MediaType.parseMediaType(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+
+    // 2026-09-07: 사용자가 준 참고 캡쳐(네이비 헤더 표 서식)에 맞춰 daily-report도
+    // 다시 만들고, weekly-report/performance-report를 새로 추가했다.
     private static final Map<String, DemoTemplateFile> DEMO_TEMPLATE_FILES = Map.of(
             "daily-report", new DemoTemplateFile(
                     "demo-templates/daily-report.docx",
                     "일일 업무 보고서.docx",
-                    MediaType.parseMediaType(
-                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")));
+                    DOCX_MEDIA_TYPE),
+            "weekly-report", new DemoTemplateFile(
+                    "demo-templates/weekly-report.docx",
+                    "주간 업무 보고서.docx",
+                    DOCX_MEDIA_TYPE),
+            "performance-report", new DemoTemplateFile(
+                    "demo-templates/performance-report.pptx",
+                    "성과관리 실적보고서.pptx",
+                    PPTX_MEDIA_TYPE));
 
     public ResponseEntity<byte[]> demoTemplateFile(String key) {
         DemoTemplateFile template = DEMO_TEMPLATE_FILES.get(key);
@@ -694,23 +709,91 @@ public class AiServiceClient {
     }
 
     // DocumentIntentResolver.detectTitle()은 "~보고서"가 들어간 문장이면 거의 다
-    // (근태관리 시스템 비교 보고서든, 일일 업무보고서든) title을 그냥 "업무보고서"로
-    // 뭉뚱그려버려서 title만으로는 구분이 안 된다. "일일"이 실제로 언급된 경우만
-    // 좁혀서, 진짜 일일업무보고 요청일 때만 원본 파일로 바꿔치기한다.
-    private ResponseEntity<byte[]> tryDemoTemplateOverride(String title, String content) {
-        String haystack =
-                (title == null ? "" : title) + " " + (content == null ? "" : content);
+    // (근태관리 시스템 비교 보고서든, 일일/주간 업무보고서든, 성과관리 실적보고서든)
+    // title을 "업무보고서"(또는 "주간 업무보고서")로 뭉뚱그려버려서 title만으로는
+    // 구분이 안 된다. 그래서 title + content(원문)를 합친 문장에서 실제로 어떤
+    // 원본 서식을 원하는지 키워드로 좁혀서 판단한다.
+    //
+    // 2026-09-07: PipelineController.executeDocumentAction()/
+    // executeGroundedDocumentAction()도 GENERATE_DOCUMENT 응답을 만들 때 이
+    // 메서드로 미리 매칭 여부를 확인해서 documentAction.format/title을 실제
+    // 서식 파일에 맞게 보정한다("업무보고서 3.pdf"가 사실은 docx였던 버그의
+    // 근본 수정 - 프론트가 Content-Disposition 헤더를 못 읽는 상황이 와도
+    // 폴백 파일명이 항상 맞는 확장자를 쓰게 된다). 그래서 private이 아니라
+    // public이다.
+    // 주의: 이 메서드는 반드시 idempotent(같은 입력이면 항상 같은 결과)해야 한다.
+    // PipelineController가 documentAction.title을 서식에 맞게 한 번 보정해두면
+    // (예: "업무보고서" -> "일일 업무 보고서"), 프론트가 그 보정된 title을 그대로
+    // 다시 generateDocumentFile()로 보내서 여기가 두 번째로 호출된다. 첫 번째
+    // 호출 때와 다른 title 문자열이 됐다고 매칭이 깨지면 안 된다.
+    public String resolveDemoTemplateKey(String title, String content) {
+        String normalizedTitle = title == null ? "" : title.trim();
+        String haystack = normalizedTitle + " " + (content == null ? "" : content);
 
-        boolean looksLikeDailyReport =
-                "업무보고서".equals(title == null ? "" : title.trim())
-                        && haystack.contains("일일")
-                        && (haystack.contains("업무보고") || haystack.contains("업무 보고"));
+        boolean mentionsPerformance =
+                haystack.contains("성과관리") || haystack.contains("성과 관리")
+                        || haystack.contains("실적보고") || haystack.contains("실적 보고");
+        if (mentionsPerformance) {
+            return "performance-report";
+        }
 
-        if (!looksLikeDailyReport) {
+        boolean mentionsReportWord =
+                haystack.contains("업무보고") || haystack.contains("업무 보고");
+        if (!mentionsReportWord) {
             return null;
         }
 
-        return demoTemplateFile("daily-report");
+        // 회의록/월간/검토 보고서처럼 명백히 다른 문서인 경우는 제외한다
+        // (DocumentIntentResolver.detectTitle()이 같은 "업무보고서" 생김새로
+        // 뭉뚱그리는 걸 막기 위한 최소한의 안전장치).
+        boolean looksUnrelatedReport =
+                normalizedTitle.contains("회의록")
+                        || normalizedTitle.contains("월간")
+                        || normalizedTitle.contains("검토");
+        if (looksUnrelatedReport) {
+            return null;
+        }
+
+        // "주간"이 실제로 언급됐으면(제목이 이미 "주간 업무보고서"로 뭉뚱그려졌든,
+        // 뭉뚱그려지기 전이든, PipelineController가 이미 "주간 업무 보고서"로
+        // 보정해뒀든) 주간 서식으로 판단한다.
+        boolean mentionsWeekly =
+                normalizedTitle.contains("주간") || haystack.contains("주간");
+        if (mentionsWeekly) {
+            return "weekly-report";
+        }
+
+        // 그 외에는 "일일"이 실제로 언급된 경우만 일일업무보고 원본으로
+        // 바꿔치기한다.
+        boolean mentionsDaily = haystack.contains("일일");
+        return mentionsDaily ? "daily-report" : null;
+    }
+
+    public boolean isDemoEnabled() {
+        return demoEnabled;
+    }
+
+    // documentAction.format 보정용 - 서식 파일의 실제 확장자.
+    public String demoTemplateFormat(String key) {
+        DemoTemplateFile template = DEMO_TEMPLATE_FILES.get(key);
+        if (template == null) return null;
+        String name = template.displayName();
+        int dot = name.lastIndexOf('.');
+        return dot >= 0 ? name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT) : null;
+    }
+
+    // documentAction.title 보정용 - 서식 파일의 표시 이름(확장자 제외).
+    public String demoTemplateBaseName(String key) {
+        DemoTemplateFile template = DEMO_TEMPLATE_FILES.get(key);
+        if (template == null) return null;
+        String name = template.displayName();
+        int dot = name.lastIndexOf('.');
+        return dot >= 0 ? name.substring(0, dot) : name;
+    }
+
+    private ResponseEntity<byte[]> tryDemoTemplateOverride(String title, String content) {
+        String key = resolveDemoTemplateKey(title, content);
+        return key == null ? null : demoTemplateFile(key);
     }
 
     private ResponseEntity<byte[]> buildDemoDocumentResponse(

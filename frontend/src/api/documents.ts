@@ -157,7 +157,7 @@ export async function deleteDocument(id: number): Promise<void> {
   });
   if (!res.ok) throw new Error(`삭제 실패: ${res.status}`);
 }
-export type DocumentFormat = "docx" | "pdf";
+export type DocumentFormat = "docx" | "pdf" | "pptx";
 
 // 서버가 Content-Disposition으로 내려준 실제 파일명을 읽어온다. 데모 모드에서는
 // 백엔드가 요청받은 format을 무시하고 실제 원본 서식 파일(예: 일일업무보고
@@ -188,7 +188,7 @@ export function guessDocumentFormat(
 ): DocumentFormat {
   if (!fileName) return fallback;
   const ext = fileName.split(".").pop()?.toLowerCase();
-  return ext === "docx" || ext === "pdf" ? ext : fallback;
+  return ext === "docx" || ext === "pdf" || ext === "pptx" ? ext : fallback;
 }
 
 export interface GeneratedDocumentFile {
