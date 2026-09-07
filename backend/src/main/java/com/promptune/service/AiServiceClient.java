@@ -614,7 +614,11 @@ public class AiServiceClient {
     // content에는 DocumentIntentResolver가 붙인 "[문서 생성 규칙]" 안내문이
     // 섞여 있을 수 있어 사용자에게 보여줄 본문에서는 그 부분을 잘라낸다.
 
-    private static final String DEMO_KOREAN_FONT_RESOURCE = "fonts/NotoSansKR-Subset.ttf";
+    // 2026-09-07: Noto Sans CJK(OTTO/CFF 외곽선)로 처음 만들었다가
+    // PDFBox 3.x가 "True Type fonts using CFF outlines are not supported"로
+    // 임베드를 거부해서, 순수 glyf 외곽선 TrueType인 나눔고딕으로 교체했다.
+    // PDType0Font.load()는 CIDFontType2(TrueType) 경로만 확실히 지원한다.
+    private static final String DEMO_KOREAN_FONT_RESOURCE = "fonts/NanumGothic-Subset.ttf";
 
     private ResponseEntity<byte[]> buildDemoDocumentResponse(
             String title,
