@@ -36,7 +36,7 @@ public class DocumentIntentResolver {
                     + "|나오게|고쳐\\s*줘|받을?\\s*수\\s*있(?:게|도록))");
 
     private static final Pattern DOCUMENT_NOUN = Pattern.compile(
-            "(업무\\s*보고서|주간\\s*보고서|월간\\s*보고서|보고서|회의록|계획서|제안서|시말서|경위서|사유서|소명서|공지문|안내문|문서|양식|템플릿)");
+            "(업무\\s*보고서|주간\\s*보고서|월간\\s*보고서|보고서|실적\\s*보고|성과\\s*관리|회의록|계획서|제안서|시말서|경위서|사유서|소명서|공지문|안내문|문서|양식|템플릿)");
 
     private static final Pattern FILE_NOUN = Pattern.compile(
             "(파일|pdf|워드|word|docx|엑셀|excel|xlsx|마크다운|markdown|텍스트파일|txt|ppt|파워포인트|슬라이드|프레젠테이션)",
@@ -114,7 +114,17 @@ public class DocumentIntentResolver {
 
         if (contextualFileRequest) {
             intentContext = previousUser + "\n" + previousAssistant + "\n" + current;
-            source = previousAssistant;
+            // 2026-09-08: 예전에는 source = previousAssistant만 썼는데,
+            // previousAssistant가 실제 보고서 내용이 아니라 "미리 준비된
+            // 질문에 대해서만 답변할 수 있어요" 같은 일반 안내문일 수도
+            // 있다. 그 경우 이번 발화(current)에 있는 진짜 키워드("성과관리
+            // 실적보고 파일로 만들어줘"의 "성과관리 실적보고")가 content에서
+            // 통째로 빠져버려서, 서식 매칭(resolveDemoTemplateKey)이 참고할
+            // 텍스트가 하나도 안 남았다. current를 항상 같이 포함해서 이런
+            // 경우에도 매칭 키워드가 유지되게 한다 - previousAssistant가
+            // 실제 내용을 담고 있는 정상 케이스에서는 그냥 문장 하나가 더
+            // 붙는 것뿐이라 해가 되지 않는다.
+            source = (previousAssistant + "\n" + current).trim();
         } else if (typeOnlyFollowup) {
             intentContext = previousUser + "\n" + current;
             source = previousUser
@@ -197,6 +207,18 @@ public class DocumentIntentResolver {
         String text = (current + "\n" + context).replaceAll("\\s+", " ");
 
         if (containsAny(text, "회의록")) return "회의록";
+        // 2026-09-08: "성과관리 실적보고 파일로 만들어줘"처럼 "실적보고서"가
+        // 아니라 "실적보고"(끝에 "서"가 없는 형태)나 "성과관리"만 언급하는
+        // 경우가 있다. AiServiceClient.resolveDemoTemplateKey()는 이미
+        // "성과관리"/"성과 관리"/"실적보고"/"실적 보고"를 최우선으로 찾는데,
+        // 정작 여기 detectTitle()에는 이 키워드가 전혀 없어서 제목을 못 찾고
+        // "PrompTune 생성 문서" 폴백으로 빠진 뒤, 그 폴백 제목만으로는 어떤
+        // 서식인지 다시 못 찾는 악순환이 있었다("PrompTune 생성 문서.pdf"
+        // 버그의 또 다른 재발 경로). resolveDemoTemplateKey와 동일한 키워드로
+        // 맞춘다.
+        if (containsAny(text, "성과관리", "성과 관리", "실적보고", "실적 보고")) {
+            return "성과관리 실적보고서";
+        }
         if (containsAny(text, "주간 업무보고", "주간 보고")) return "주간 업무보고서";
         if (containsAny(text, "월간 업무보고", "월간 보고")) return "월간 업무보고서";
         if (containsAny(text, "업무보고")) return "업무보고서";
