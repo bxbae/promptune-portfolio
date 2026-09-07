@@ -30,5 +30,186 @@
       }
     ],
     "generatedAnswer": "이강인 선수는 2026년 여름 파리 생제르맹(PSG)을 떠나 스페인 라리가의 아틀레티코 마드리드로 이적했으며, 등번호는 7번을 달고 있습니다.\n\n2023년부터 2026년까지 3시즌 동안 PSG 소속으로 활약했고, 이번 이적으로 새로운 팀에서 커리어를 이어가게 되었습니다.\n\n개인 프로필을 조금 더 살펴보면, 이강인 선수는 2001년 2월 19일 인천광역시 남동구 간석동에서 태어났습니다.\n\n※ 이 답변은 promptune-portfolio 데모용으로 미리 준비된 시나리오입니다. 실제 서비스에서는 실시간 웹 검색 결과를 바탕으로 답변이 생성됩니다."
+  },
+  {
+    "matchQuestions": [
+      "이 프로젝트는 뭘 만든 거예요?",
+      "PrompTune이 뭐야?",
+      "PrompTune 서비스 소개해줘",
+      "이거 어떤 서비스인지 설명해줘",
+      "왜 이 프로젝트를 만들게 됐어?",
+      "이 프로젝트 기획 의도가 뭐야?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "PrompTune은 \"AI에게 뭘 시킬지 정확히 말하는 것 자체가 생각보다 어렵다\"는 문제에서 출발한 서비스예요. 예를 들어 \"메일 좀 정리해서 보내줘\"라고만 쓰면 AI가 의도와 다르게 엉뚱하게 알아듣는 경우가 많죠.\n\nGrammarly가 이미 쓴 문장을 고쳐준다면, PrompTune은 그 앞 단계 — AI에게 보내기 전 프롬프트 자체를 먼저 다듬어주는 서비스예요. 핵심 가치는 네 가지예요: 생성 전 개선, 행동을 습관으로 만들기, 맥락에 맞춘 추천, 그리고 왜 그렇게 추천하는지 이유를 함께 보여주는 것.\n\n전체 흐름은 입력 → 검증 → 추천 → 생성 → 학습 순서로 이어지고, MVP 범위는 \"프롬프트 교정 + 최종 응답 생성 + 개인화 학습 루프\" 세 가지로 명확히 잡았어요. 완전 자동 생성이 아니라 사람이 선택하는 지점을 의도적으로 남겨둔 것도 특징이에요."
+  },
+  {
+    "matchQuestions": [
+      "왜 이런 구조로 설계했나요?",
+      "아키텍처를 이렇게 나눈 이유가 뭐야?",
+      "왜 서비스를 여러 개로 쪼갰어?",
+      "시스템 구조 설계 이유 설명해줘",
+      "AI 서비스랑 백엔드를 왜 분리했어?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "하나의 범용 LLM에 모든 책임을 몰아주지 않고, 진단(KcELECTRA) / 추천 생성(HCX Suggest) / 검색(Retrieval Orchestrator) / 최종 생성(HCX Generate) / 검증(Rule Validator) / 오케스트레이션(Spring Boot)으로 역할을 분리했어요. 모델은 판단과 생성에만 쓰고, 점수·규칙·추천 우선순위 같은 건 코드로 처리해서 속도·비용·설명가능성을 같이 확보하려는 목적이에요.\n\nAI 모델은 교체나 튜닝이 잦을 걸로 예상해서, FastAPI 기반 AI Service를 Backend와 별도 서비스로 분리해 독립적으로 개발·배포할 수 있게 했고요. 검색도 내부문서(RAG), 웹(Tavily), 사용자 정보(MS Graph) 중 실제로 필요한 것만 라우팅하도록 설계했어요.\n\n실패 정책도 상황별로 다르게 뒀어요. 사용자가 직접 지정한 문서 검색이 실패하면 fail-closed(503)로 확실히 막고, 일반 웹 검색이나 MS 컨텍스트 조회 실패는 fail-open으로 처리해서 전체 흐름이 막히지 않게 했어요."
+  },
+  {
+    "matchQuestions": [
+      "전체 파이프라인이 어떻게 되나요?",
+      "프롬프트 처리 흐름 설명해줘",
+      "Enter 전이랑 Enter 후에 뭐가 일어나?",
+      "파이프라인 단계별로 알려줘",
+      "요청 하나가 들어오면 내부적으로 어떻게 처리돼?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "PrompTune_Pipeline 기준으로 총 11단계예요. Enter 전에는 1) 사용자 프롬프트 입력, 2) 8요소 진단 & 업무유형 분석(KcELECTRA+Rule), 3) 개인화 인라인 추천(HCX 3B)이 일어나요.\n\nEnter를 누르면 4) Retrieval 라우팅(검색 필요 여부·종류 결정), 5) 필요시 근거 검색(내부 RAG·BGE-M3 / Tavily / User Context), 6) 검색 근거 선별(Evidence Selection), 7) 최종 답변 생성(HCX 3B), 8) 응답 검증(Rule Validation), 9) 답변과 출처 반환 순서로 진행돼요.\n\n마지막으로 습관 DB 저장 단계에서 10) 세션·응답·사용자 행동을 PostgreSQL에 저장하고, 11) 그 데이터를 개인화 및 습관 대시보드에서 활용해요. 이 마지막 두 단계가 있어서 두 번째 쓸 때부터 톤이나 스타일이 자동으로 반영되는 거예요."
+  },
+  {
+    "matchQuestions": [
+      "AI 모델은 어떻게 학습시켰나요?",
+      "KcELECTRA 학습 과정 알려줘",
+      "모델 학습 데이터는 어떻게 만들었어?",
+      "HCX랑 BGE-M3도 직접 학습시킨 거야?",
+      "AI 모델 학습·활용 방식 설명해줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "모델마다 접근이 달라요. 8요소 진단을 맡는 KcELECTRA는 저희가 직접 학습시켰고, HCX 3B와 BGE-M3는 사전학습된 모델을 그대로 가져다 쓰는 활용 설계 쪽이에요.\n\nKcELECTRA 학습 과정은 PII 마스킹 → 1차 자동 라벨링(prelabel) → 사람 검수 → Cohen's kappa로 라벨러 간 일치도 검증 → gold.csv 확정 순서로 진행했고요. 중간에 라벨링 기준을 \"문장에 단어가 없으면 1\"이 아니라 \"이 요청을 수행하는 데 이 정보가 더 필요한가?\"로 재정의하면서 CONTEXT/FORMAT/CONSTRAINT처럼 낮았던 kappa 값을 개선했어요. 학습 설정은 Train 2,000 / Valid 400 / Epoch 3 / Batch 4 / LR 2e-5로, seed 42/52/62 세 개로 돌려서 v6-seed42를 최종 champion으로 채택했고요(이 수치는 팀 학습 이력 기준으로, 별도 학습 저장소가 없어서 과장하지 않고 있는 그대로 말씀드리는 거예요). threshold도 라벨마다 0.5로 통일하지 않고 validation F1 기준으로 개별 탐색했어요(TASK 0.07 ~ CONTEXT 0.31 등).\n\n반면 HCX 3B는 역할별로 프롬프트를 분리(진단보완용/최종생성용)해서 활용했고, BGE-M3는 임베딩 모델 자체를 재학습하기보다 청킹 전략을 조정하는 검색 파이프라인 튜닝에 집중했어요."
+  },
+  {
+    "matchQuestions": [
+      "개발하면서 어떤 문제를 겪었나요?",
+      "개발 중에 겪은 어려움 알려줘",
+      "트러블슈팅 사례 있어?",
+      "제일 힘들었던 문제가 뭐야?",
+      "버그나 문제 해결한 경험 말해줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "파이프라인 단계마다 크고 작은 문제와 해결 과정이 있었어요.\n\n진단 모델(KcELECTRA)에서는 AUDIENCE 라벨만 모델이 자주 놓치는 케이스가 있었어요. 그래서 이메일 업무인데 수신 대상 패턴이 아예 없으면 강제로 missing=1로 처리하는 rule 보정을 추가해서 해결했고요.\n\n추론 인프라 쪽에서는 GPU 인스턴스를 쓰고 있는데도 컨테이너에 device reservation이 빠져 있어서 실제로는 CPU로 추론이 돌고 있던 문제가 있었어요. Dockerfile.gpu와 reservation, CUDA 환경 설정을 고쳐서 잡았고, 이후 벤치마크에서 같은 인스턴스 기준 CPU float32 57.84초 → GPU(T4) float16 6.41초로 약 9배 빨라진 걸 확인했어요.\n\n내부 검색(BGE-M3) 쪽은 초기에 Top-1 오분류 케이스가 있었는데, 청킹 단위를 재조정해서 개선했고 최종적으로 54문항 자체 평가셋 기준 Top-1 96.3%(52/54), Top-3 100%(54/54)를 달성했어요.\n\n개인화 점수 쪽에서는 거절(dismiss)할수록 오히려 먼저 추천되는 역방향 정렬 버그가 있었는데, accept 비율 기준으로 점수 산출 로직을 재설계해서 교정했어요."
+  },
+  {
+    "matchQuestions": [
+      "팀 구성이 어떻게 되나요?",
+      "팀원 역할 분담 알려줘",
+      "누가 뭘 맡았어?",
+      "팀 소개해줘",
+      "역할별 담당자가 누구야?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "총 5명이 영역별로 나눠서 맡았어요.\n\nFrontend/Web Client는 예진님이 PromptEditor, Chat, Files, Settings, Dashboard, 수신자 UX를 담당했고, Backend/DB/Personalization은 형기님이 Spring 오케스트레이션, 인증, DB, 습관학습, MS 연결을 맡았어요.\n\nAI/LLM은 승득님이 KcELECTRA 진단과 HCX Suggest/Generate/Improve, Validation을, Search & Retrieval/외부 컨텍스트는 승연님이 Routing, BGE-M3, pgvector, Tavily, Evidence, MS Graph를 담당했고요. 저(병환)는 DevOps/Infra로 Docker, AWS, CI/CD, 배포·운영을 맡았어요. Chrome Extension은 형기님 주도로 별도 repo에서 개발하면서 동일한 Backend를 재사용했고, 예진님이 지원했어요.\n\n이건 대표 책임 기준이고, 실제로는 습관학습(Backend+AI), 수신자 개인화 (Frontend+Backend+MS Graph)처럼 영역을 넘나드는 협업도 많았어요."
+  },
+  {
+    "matchQuestions": [
+      "GPU랑 CPU 성능 차이가 있나요?",
+      "추론 속도 벤치마크 결과 알려줘",
+      "GPU 인스턴스 왜 썼어?",
+      "모델 추론 인프라는 어떻게 구성했어?",
+      "HCX 추론 성능 어느 정도야?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "네, 차이가 꽤 커요. 같은 g4dn.xlarge 인스턴스에서 HCX 3B 추론을 CPU float32로 돌렸을 때 57.84초가 걸린 반면, GPU(T4) float16으로 돌리면 6.41초로 줄어들어요 (warm 상태 3회 평균 기준, 약 9배 차이예요).\n\n사실 처음엔 GPU 인스턴스를 쓰고 있는데도 이 정도로 느린 게 이상해서 확인해보니, 컨테이너에 device reservation 설정이 빠져 있어서 실제로는 GPU를 안 쓰고 CPU로만 추론이 돌고 있던 문제였어요. Dockerfile.gpu와 reservation, CUDA 환경 설정을 고치고 나서야 GPU가 제대로 잡혔고요.\n\n추론 설계 쪽에서는 역할별로 프롬프트를 분리(진단보완용/최종생성용)했고, 컨텍스트 정보가 아예 없으면 모델 호출 자체를 생략하고 고정 안전 문구로 대체하는 fast-path도 넣어서 불필요한 호출을 줄였어요."
+  },
+  {
+    "matchQuestions": [
+      "내부 문서 검색은 어떻게 하나요?",
+      "RAG는 어떻게 구현했어?",
+      "BGE-M3는 어디에 쓰여?",
+      "문서 첨부하면 어떻게 처리돼?",
+      "내부 검색 정확도 어느 정도야?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "내부 문서 검색은 BGE-M3 임베딩 모델을 활용한 RAG 구조예요. 임베딩 모델 자체를 새로 학습시키기보다는 사전학습된 모델을 그대로 쓰고, 대신 문서를 어떻게 쪼갤지 청킹 전략을 조정하는 데 집중했어요.\n\n예를 들어 사용자가 근태관리 정책 가이드 같은 문서를 첨부하면, Retrieval 라우팅 단계에서 내부 문서 검색이 필요하다고 판단되고, pgvector 기반으로 관련 근거를 찾아서 최종 답변 생성에 반영해요.\n\n정확도는 54문항 자체 평가셋 기준으로 Top-1 96.3%(52/54), Top-3 100%(54/54)예요. 처음엔 Top-1에서 오분류되는 케이스가 있었는데, 청킹 단위를 재조정하면서 개선한 결과예요. 그리고 사용자가 직접 지정한 문서 검색이 실패하면 대충 답하지 않고 fail-closed(503)로 확실히 막도록 설계했어요."
+  },
+  {
+    "matchQuestions": [
+      "MVP 스코프가 어떻게 되나요?",
+      "이번에 어디까지 구현했어?",
+      "무엇을 안 만들었어?",
+      "MVP 범위 설명해줘",
+      "이번 버전에서 뭘 뺐어?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "MVP 스코프는 \"프롬프트 교정 + 최종 응답 생성 + 개인화 학습 루프\" 세 가지로 명확히 잡았어요.\n\n일부러 안 한 것도 있어요. 대표적으로 완전 자동 생성이 아니라, 추천 문구를 받아들일지 말지 사람이 직접 선택하는 지점을 의도적으로 남겨뒀어요. 추천 이유를 함께 보여주는 것도 같은 맥락이고요 — AI가 알아서 다 처리하는 게 아니라, 사용자가 판단할 수 있게 설계했어요.\n\nChrome 확장 프로그램은 현재 개발 중인데, 프롬프트 진단과 추천 문구 생성까지는 작동하고 답변 생성만 외부 AI가 대신하는 방식이라 마무리 단계만 남아 있어요. 그 외에 Internal RAG reranker 도입, MS Mail/Files/Calendar 관련 Web UI 활성 범위 확장, BGE dense+sparse hybrid 검색 고도화 같은 것도 향후 계획 후보로 두고 있어요."
+  },
+  {
+    "matchQuestions": [
+      "시연 시나리오는 어떤 내용인가요?",
+      "데모 영상에서 뭘 보여줘?",
+      "개인화가 실제로 어떻게 작동하는지 보여줄 수 있어?",
+      "길인턴 시나리오 설명해줘",
+      "두 번째 쓸 때부터 뭐가 달라져?"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "시연은 \"경영지원팀 길인턴\"이 노후화된 사내 근태관리 시스템을 교체할지 검토하는 업무를 맡았다는 페르소나로 진행돼요. 온보딩 3문항을 먼저 거치고, 그 답이 이후 답변에 실제로 반영되는지 보여준 다음, 6단계짜리 핵심 스토리로 들어가요.\n\n1단계에서는 \"유부장님께 시스템 문제점 정리해서 보고해줘\"라고 입력하면 톤을 진단·추천해주고 저장 동의를 받아요. 2단계는 그 문제들을 해결할 최신 근태관리 솔루션을 외부 웹에서 검색하고, 3단계는 근태관리 정책 가이드 문서를 첨부해서 현재 시스템과 방금 찾은 솔루션들을 내부 문서 기준으로 비교해요. 4단계는 그 비교 내용을 바탕으로 맥락을 유지한 채 최종 검토 보고서 파일을 생성하고요.\n\n5단계는 검증 장면이에요 — \"온프레미스 설치도 지원하는 솔루션 있어?\"라고 물으면, 근거가 없을 땐 있는 척하지 않고 정직하게 답변해요. 그리고 6단계, 톤을 따로 지정하지 않고 \"방금 만든 보고서 첨부해서 유부장님께 전달 메일 써줘\"라고만 해도 1단계에서 저장했던 톤이 자동으로 반영돼요. 이게 파트1에서 말한 \"습관 학습\" 가치를 실제로 증명하는 장면이에요."
   }
 ]
