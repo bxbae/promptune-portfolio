@@ -40,6 +40,12 @@ public class AiServiceClient {
     // 시나리오로 즉시 응답한다. Render의 promptune-portfolio 백엔드 서비스에서만
     // AI_DEMO_ENABLED=true로 켠다 - 실제 운영(promptune)에는 켜지 않는다.
     //
+    // generateDocument()도 같은 이유로 데모 모드에서 우회한다: "~보고서 파일로
+    // 만들어줘" 같은 요청은 (PipelineController의 DocumentIntentResolver가) ai.generate()를
+    // 거치지 않고 바로 이 메서드를 호출하는데, 데모 배포에는 실제 ai-service가 없어서
+    // 그대로 두면 다운로드 버튼을 누를 때마다 500이 난다. 데모에서는 POI/PDFBox로
+    // 백엔드에서 직접 docx/pdf/xlsx/txt/md를 만들어 내려준다 (buildDemoDocumentBytes).
+    //
     // 주의: docs/MOCK_GUIDE.md의 "mock"(나중에 실제 모델로 교체할 임시 구현)과는
     // 다른 개념이라 일부러 "mock"이 아닌 "demo"로 이름 붙였다.
     @Value("${ai.demo.enabled:false}")
@@ -502,6 +508,13 @@ public class AiServiceClient {
                     format);
         }
 
+        // 데모 모드에서는 사내 기존 양식(template)까지는 재현하지 않고,
+        // 일반 목업 문서로 대체한다 - 어차피 실제 ai-service의 템플릿 채움
+        // 로직을 그대로 흉내낼 수는 없다.
+        if (demoEnabled) {
+            return buildDemoDocumentResponse(title, content, format);
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -558,6 +571,10 @@ public class AiServiceClient {
             String content,
             String format) {
 
+        if (demoEnabled) {
+            return buildDemoDocumentResponse(title, content, format);
+        }
+
         long start = System.currentTimeMillis();
 
         try {
@@ -590,6 +607,326 @@ public class AiServiceClient {
         }
     }
 
+
+    // ── 데모 모드 전용 목업 문서 생성 ───────────────────────────────────────
+    // 실제 ai-service 없이도 "파일로 만들어줘" 요청이 500 없이 동작하도록,
+    // title/content를 그대로 docx/pdf/xlsx/txt/md 바이트로 변환한다.
+    // content에는 DocumentIntentResolver가 붙인 "[문서 생성 규칙]" 안내문이
+    // 섞여 있을 수 있어 사용자에게 보여줄 본문에서는 그 부분을 잘라낸다.
+
+    private static final String DEMO_KOREAN_FONT_RESOURCE = "fonts/NotoSansKR-Subset.ttf";
+
+    private ResponseEntity<byte[]> buildDemoDocumentResponse(
+            String title,
+            String content,
+            String format) {
+
+        String safeTitle = (title == null || title.isBlank())
+                ? "PrompTune 생성 문서"
+                : title.trim();
+
+        String body = stripDemoGenerationRules(content);
+        String fmt = (format == null ? "" : format.trim().toLowerCase(java.util.Locale.ROOT));
+
+        byte[] bytes;
+        MediaType mediaType;
+
+        try {
+            switch (fmt) {
+                case "docx" -> {
+                    bytes = buildDemoDocx(safeTitle, body);
+                    mediaType = MediaType.parseMediaType(
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+                }
+                case "xlsx" -> {
+                    bytes = buildDemoXlsx(safeTitle, body);
+                    mediaType = MediaType.parseMediaType(
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                }
+                case "md" -> {
+                    bytes = ("# " + safeTitle + "\n\n" + body)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    mediaType = MediaType.valueOf("text/markdown; charset=UTF-8");
+                }
+                case "txt" -> {
+                    bytes = (safeTitle + "\n\n" + body)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    mediaType = MediaType.valueOf("text/plain; charset=UTF-8");
+                }
+                default -> {
+                    // pdf 및 그 외 미지원 포맷은 전부 pdf로 내려준다
+                    // (DocumentIntentResolver의 기본값도 pdf).
+                    bytes = buildDemoPdf(safeTitle, body);
+                    mediaType = MediaType.APPLICATION_PDF;
+                }
+            }
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "데모 문서 생성에 실패했습니다: " + e.getMessage(),
+                    e);
+        }
+
+        String extension = fmt.isBlank() ? "pdf" : fmt;
+
+        String downloadFilename = safeTitle.replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_")
+                + "." + extension;
+
+        org.springframework.http.ContentDisposition disposition =
+                org.springframework.http.ContentDisposition.attachment()
+                        .filename(downloadFilename, java.nio.charset.StandardCharsets.UTF_8)
+                        .build();
+
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .header(
+                        org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        disposition.toString())
+                .body(bytes);
+    }
+
+    private String stripDemoGenerationRules(String content) {
+        if (content == null) {
+            return "";
+        }
+
+        int idx = content.indexOf("[문서 생성 규칙]");
+
+        if (idx < 0) {
+            return content.trim();
+        }
+
+        return content.substring(0, idx).trim();
+    }
+
+    private byte[] buildDemoDocx(
+            String title,
+            String body) throws java.io.IOException {
+
+        try (org.apache.poi.xwpf.usermodel.XWPFDocument doc =
+                new org.apache.poi.xwpf.usermodel.XWPFDocument()) {
+
+            org.apache.poi.xwpf.usermodel.XWPFParagraph titlePara = doc.createParagraph();
+            org.apache.poi.xwpf.usermodel.XWPFRun titleRun = titlePara.createRun();
+            titleRun.setText(title);
+            titleRun.setBold(true);
+            titleRun.setFontSize(20);
+            titleRun.setFontFamily("맑은 고딕");
+
+            doc.createParagraph();
+
+            for (String rawLine : body.split("\n", -1)) {
+                String line = rawLine.trim();
+
+                org.apache.poi.xwpf.usermodel.XWPFParagraph p = doc.createParagraph();
+                org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+                r.setFontFamily("맑은 고딕");
+                r.setFontSize(11);
+
+                if (line.isEmpty()) {
+                    continue;
+                } else if (line.startsWith("### ")) {
+                    r.setText(line.substring(4));
+                    r.setBold(true);
+                    r.setFontSize(12);
+                } else if (line.startsWith("## ")) {
+                    r.setText(line.substring(3));
+                    r.setBold(true);
+                    r.setFontSize(13);
+                } else if (line.startsWith("# ")) {
+                    r.setText(line.substring(2));
+                    r.setBold(true);
+                    r.setFontSize(15);
+                } else if (line.startsWith("- ") || line.startsWith("· ") || line.startsWith("* ")) {
+                    r.setText("•  " + line.substring(2).trim());
+                } else {
+                    r.setText(line);
+                }
+            }
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            doc.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private byte[] buildDemoXlsx(
+            String title,
+            String body) throws java.io.IOException {
+
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+
+            org.apache.poi.xssf.usermodel.XSSFSheet sheet = wb.createSheet(
+                    title.length() > 31 ? title.substring(0, 31) : title);
+
+            int rowIdx = 0;
+            org.apache.poi.ss.usermodel.Row titleRow = sheet.createRow(rowIdx++);
+            titleRow.createCell(0).setCellValue(title);
+
+            rowIdx++;
+
+            for (String rawLine : body.split("\n", -1)) {
+                String line = rawLine.trim();
+
+                if (line.isEmpty()) {
+                    continue;
+                }
+
+                org.apache.poi.ss.usermodel.Row row = sheet.createRow(rowIdx++);
+
+                if (line.startsWith("- ") || line.startsWith("· ") || line.startsWith("* ")) {
+                    row.createCell(0).setCellValue(line.substring(2).trim());
+                } else {
+                    row.createCell(0).setCellValue(line);
+                }
+            }
+
+            sheet.setColumnWidth(0, 20000);
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            wb.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    private byte[] buildDemoPdf(
+            String title,
+            String body) throws java.io.IOException {
+
+        try (org.apache.pdfbox.pdmodel.PDDocument doc = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            org.apache.pdfbox.pdmodel.font.PDType0Font font;
+
+            try (java.io.InputStream fontStream =
+                    getClass().getClassLoader()
+                            .getResourceAsStream(DEMO_KOREAN_FONT_RESOURCE)) {
+
+                if (fontStream == null) {
+                    throw new java.io.IOException(
+                            "한글 폰트 리소스를 찾을 수 없습니다: " + DEMO_KOREAN_FONT_RESOURCE);
+                }
+
+                font = org.apache.pdfbox.pdmodel.font.PDType0Font.load(doc, fontStream);
+            }
+
+            float margin = 50f;
+            float pageWidth = org.apache.pdfbox.pdmodel.common.PDRectangle.A4.getWidth();
+            float pageHeight = org.apache.pdfbox.pdmodel.common.PDRectangle.A4.getHeight();
+            float maxTextWidth = pageWidth - margin * 2;
+
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            lines.add(" TITLE " + title);
+            lines.add("");
+
+            for (String rawLine : body.split("\n", -1)) {
+                lines.addAll(wrapPdfLine(rawLine.trim(), font, 11f, maxTextWidth));
+            }
+
+            org.apache.pdfbox.pdmodel.PDPage page =
+                    new org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4);
+            doc.addPage(page);
+
+            org.apache.pdfbox.pdmodel.PDPageContentStream stream =
+                    new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page);
+
+            float y = pageHeight - margin;
+            float leading = 16f;
+
+            try {
+                for (String line : lines) {
+                    if (y < margin) {
+                        stream.close();
+                        page = new org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4);
+                        doc.addPage(page);
+                        stream = new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page);
+                        y = pageHeight - margin;
+                    }
+
+                    boolean isTitle = line.startsWith(" TITLE ");
+                    String text = isTitle ? line.substring(7) : line;
+                    float fontSize = isTitle ? 18f : 11f;
+
+                    stream.beginText();
+                    stream.setFont(font, fontSize);
+                    stream.newLineAtOffset(margin, y);
+                    stream.showText(sanitizeForFont(text, font));
+                    stream.endText();
+
+                    y -= isTitle ? leading * 1.6f : leading;
+                }
+            } finally {
+                stream.close();
+            }
+
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    /** 한 줄을 폰트/폭 기준으로 여러 줄로 감싼다 (아주 단순한 word-wrap). */
+    private java.util.List<String> wrapPdfLine(
+            String line,
+            org.apache.pdfbox.pdmodel.font.PDType0Font font,
+            float fontSize,
+            float maxWidth) throws java.io.IOException {
+
+        java.util.List<String> result = new java.util.ArrayList<>();
+
+        if (line.isEmpty()) {
+            result.add("");
+            return result;
+        }
+
+        StringBuilder current = new StringBuilder();
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            String candidate = current.toString() + c;
+
+            float width;
+            try {
+                width = font.getStringWidth(sanitizeForFont(candidate, font)) / 1000f * fontSize;
+            } catch (Exception e) {
+                width = 0f;
+            }
+
+            if (width > maxWidth && current.length() > 0) {
+                result.add(current.toString());
+                current = new StringBuilder();
+                current.append(c);
+            } else {
+                current.append(c);
+            }
+        }
+
+        if (current.length() > 0 || result.isEmpty()) {
+            result.add(current.toString());
+        }
+
+        return result;
+    }
+
+    /** 임베드한 서브셋 폰트에 없는 글자는 PDFBox가 예외를 던지므로 안전하게 대체한다. */
+    private String sanitizeForFont(
+            String text,
+            org.apache.pdfbox.pdmodel.font.PDType0Font font) {
+
+        StringBuilder out = new StringBuilder(text.length());
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+
+            try {
+                font.encode(String.valueOf(c));
+                out.append(c);
+            } catch (Exception e) {
+                out.append('?');
+            }
+        }
+
+        return out.toString();
+    }
 
     public ResponseEntity<byte[]> previewDocument(
             byte[] fileBytes,

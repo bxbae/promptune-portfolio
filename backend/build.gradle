@@ -29,6 +29,11 @@ dependencies {
     implementation platform('software.amazon.awssdk:bom:2.28.11')
     implementation 'software.amazon.awssdk:s3'
 
+    // 데모 모드(AI_DEMO_ENABLED=true)에서 실제 ai-service 없이도 문서 다운로드가
+    // 동작하도록 docx/pdf를 백엔드에서 직접 만들기 위한 라이브러리.
+    implementation 'org.apache.poi:poi-ooxml:5.3.0'
+    implementation 'org.apache.pdfbox:pdfbox:3.0.3'
+
     // Phase 2-A 신규: 이전까지 backend에 테스트 의존성이 전혀 없었음.
     // PreferenceResolutionService 단위 테스트를 위해 최소한으로 추가.
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
