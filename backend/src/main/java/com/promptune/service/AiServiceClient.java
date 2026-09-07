@@ -520,7 +520,7 @@ public class AiServiceClient {
         // 일반 목업 문서로 대체한다 - 어차피 실제 ai-service의 템플릿 채움
         // 로직을 그대로 흉내낼 수는 없다.
         if (demoEnabled) {
-            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content);
+            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content, format);
             if (templateOverride != null) {
                 return templateOverride;
             }
@@ -589,7 +589,7 @@ public class AiServiceClient {
             // 바로 온다. "일일 업무보고서를 파일로 만들어줘"처럼 실제 사내
             // 서식 원본이 있는 요청이면, AI가 재조립한 목업 대신 원본 파일을
             // 내려준다 - 그래야 표/서식이 그대로 보인다.
-            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content);
+            ResponseEntity<byte[]> templateOverride = tryDemoTemplateOverride(title, content, format);
             if (templateOverride != null) {
                 return templateOverride;
             }
@@ -676,7 +676,7 @@ public class AiServiceClient {
                     "성과관리 실적보고서.pptx",
                     PPTX_MEDIA_TYPE));
 
-    public ResponseEntity<byte[]> demoTemplateFile(String key) {
+    private DemoTemplateFile demoTemplateOrThrow(String key) {
         DemoTemplateFile template = DEMO_TEMPLATE_FILES.get(key);
 
         if (template == null) {
@@ -685,8 +685,10 @@ public class AiServiceClient {
                     "존재하지 않는 데모 템플릿입니다: " + key);
         }
 
-        byte[] bytes;
+        return template;
+    }
 
+    private byte[] readTemplateResourceBytes(DemoTemplateFile template) {
         try (java.io.InputStream in =
                 getClass().getClassLoader().getResourceAsStream(template.resourcePath())) {
 
@@ -695,13 +697,18 @@ public class AiServiceClient {
                         "템플릿 리소스를 찾을 수 없습니다: " + template.resourcePath());
             }
 
-            bytes = in.readAllBytes();
+            return in.readAllBytes();
         } catch (java.io.IOException e) {
             throw new ResponseStatusException(
                     HttpStatus.INTERNAL_SERVER_ERROR,
                     "데모 템플릿을 불러오지 못했습니다: " + e.getMessage(),
                     e);
         }
+    }
+
+    public ResponseEntity<byte[]> demoTemplateFile(String key) {
+        DemoTemplateFile template = demoTemplateOrThrow(key);
+        byte[] bytes = readTemplateResourceBytes(template);
 
         org.springframework.http.ContentDisposition disposition =
                 org.springframework.http.ContentDisposition.attachment()
@@ -714,6 +721,117 @@ public class AiServiceClient {
                         org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
                         disposition.toString())
                 .body(bytes);
+    }
+
+    // 2026-09-07: 사용자가 "PDF로 줘"처럼 명시적으로 PDF를 요청하면, 원본
+    // docx/pptx를 그대로 내려주는 대신 실제 서식(표/색상)이 그대로 보이는
+    // PDF로 변환해서 내려준다. buildDemoDocumentResponse()의 PDFBox 기반
+    // 목업 PDF는 표 없이 텍스트만 나열하는 수준이라 원본과 전혀 다르게
+    // 보였다("업무보고서 4.pdf"가 표 없이 문단만 나온 문제) - 서버에 설치된
+    // LibreOffice(soffice)로 원본 파일을 그대로 변환해서 원본과 동일한
+    // 모양의 PDF를 만든다.
+    public ResponseEntity<byte[]> demoTemplateFileAsPdf(String key) {
+        DemoTemplateFile template = demoTemplateOrThrow(key);
+        byte[] sourceBytes = readTemplateResourceBytes(template);
+        String sourceExt = extensionOf(template.resourcePath());
+
+        byte[] pdfBytes;
+        try {
+            pdfBytes = convertToPdfViaLibreOffice(sourceBytes, sourceExt);
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "PDF 변환에 실패했습니다: " + e.getMessage(),
+                    e);
+        }
+
+        String pdfFilename = demoTemplateBaseName(key) + ".pdf";
+
+        org.springframework.http.ContentDisposition disposition =
+                org.springframework.http.ContentDisposition.attachment()
+                        .filename(pdfFilename, java.nio.charset.StandardCharsets.UTF_8)
+                        .build();
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(
+                        org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        disposition.toString())
+                .body(pdfBytes);
+    }
+
+    private String extensionOf(String resourcePath) {
+        int dot = resourcePath.lastIndexOf('.');
+        return dot >= 0 ? resourcePath.substring(dot + 1) : "bin";
+    }
+
+    // soffice --headless --convert-to pdf를 서브프로세스로 돌려서 변환한다.
+    // 요청마다 새 프로세스를 띄우는 방식이라 몇 초 걸리지만, 데모 사이트의
+    // 저빈도 다운로드 요청에는 충분하다 - 상시 리스너 방식은 과한 복잡도.
+    private byte[] convertToPdfViaLibreOffice(byte[] sourceBytes, String sourceExt)
+            throws java.io.IOException, InterruptedException {
+
+        java.nio.file.Path tempDir =
+                java.nio.file.Files.createTempDirectory("demo-template-pdf-");
+
+        try {
+            java.nio.file.Path sourceFile = tempDir.resolve("source." + sourceExt);
+            java.nio.file.Files.write(sourceFile, sourceBytes);
+
+            // 요청마다 별도의 LibreOffice 사용자 프로필 디렉터리를 지정한다 -
+            // 기본 프로필을 공유하면 동시에 여러 변환 요청이 들어올 때 프로필
+            // 잠금(lock) 충돌로 변환이 실패할 수 있다.
+            java.nio.file.Path profileDir = tempDir.resolve("lo-profile");
+
+            ProcessBuilder pb = new ProcessBuilder(
+                    "soffice",
+                    "--headless",
+                    "--norestore",
+                    "-env:UserInstallation=file://" + profileDir,
+                    "--convert-to", "pdf",
+                    "--outdir", tempDir.toString(),
+                    sourceFile.toString());
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            // 표준출력 버퍼가 가득 차서 프로세스가 멈추지 않도록 반드시 소비한다.
+            try (java.io.InputStream processOutput = process.getInputStream()) {
+                processOutput.readAllBytes();
+            }
+
+            boolean finishedInTime = process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finishedInTime) {
+                process.destroyForcibly();
+                throw new java.io.IOException("PDF 변환이 30초 내에 끝나지 않았습니다.");
+            }
+            if (process.exitValue() != 0) {
+                throw new java.io.IOException(
+                        "soffice 변환이 실패했습니다 (exit=" + process.exitValue() + ")");
+            }
+
+            java.nio.file.Path pdfFile = tempDir.resolve("source.pdf");
+            if (!java.nio.file.Files.exists(pdfFile)) {
+                throw new java.io.IOException("변환된 PDF 파일을 찾을 수 없습니다.");
+            }
+
+            return java.nio.file.Files.readAllBytes(pdfFile);
+        } finally {
+            // 실패해도 서비스에 영향 없도록 임시파일 정리 에러는 조용히 무시한다.
+            try {
+                java.nio.file.Files.walk(tempDir)
+                        .sorted(java.util.Comparator.reverseOrder())
+                        .forEach(p -> {
+                            try {
+                                java.nio.file.Files.delete(p);
+                            } catch (java.io.IOException ignored) {
+                                // no-op
+                            }
+                        });
+            } catch (java.io.IOException ignored) {
+                // no-op
+            }
+        }
     }
 
     // DocumentIntentResolver.detectTitle()은 "~보고서"가 들어간 문장이면 거의 다
@@ -799,9 +917,47 @@ public class AiServiceClient {
         return dot >= 0 ? name.substring(0, dot) : name;
     }
 
-    private ResponseEntity<byte[]> tryDemoTemplateOverride(String title, String content) {
+    // 2026-09-07: DocumentIntentResolver.detectFormat()은 형식을 아예 안
+    // 밝히면 기본값으로도 "pdf"를 돌려주기 때문에, format 문자열만으로는
+    // "진짜 PDF로 달라고 했는지"와 "그냥 기본값이 pdf인 건지"를 구분할 수
+    // 없다. 그래서 원문(title+content)에 "pdf"라는 단어가 실제로 있는지로
+    // 판단한다 - 명시적으로 pdf를 언급하지 않았으면 원본 서식(docx/pptx)을
+    // 그대로 내려주고, 실제로 "pdf"라고 말했을 때만 변환해서 내려준다.
+    private boolean wantsExplicitPdf(String title, String content) {
+        String haystack =
+                ((title == null ? "" : title) + " " + (content == null ? "" : content))
+                        .toLowerCase(java.util.Locale.ROOT);
+        return haystack.contains("pdf");
+    }
+
+    // 메시지별 "파일로 저장" 버튼처럼, format이 채팅 문구 추론이 아니라 사용자가
+    // 직접 고른 값(버튼 클릭)으로 넘어오는 호출부에서는 그 값 자체가 신뢰할 수
+    // 있는 명시적 신호다. 반대로 documentAction.format은 DocumentIntentResolver가
+    // 기본값으로 채워 넣을 수 있어 그 자체만으로는 신뢰할 수 없으므로, 텍스트에
+    // "pdf"가 실제로 언급된 경우와 OR로 묶어서 판단한다.
+    private boolean wantsExplicitPdf(String title, String content, String format) {
+        return wantsExplicitPdf(title, content)
+                || "pdf".equalsIgnoreCase(format == null ? "" : format.trim());
+    }
+
+    // documentAction.format 보정용 - PDF를 명시적으로 요청했으면 "pdf",
+    // 아니면 서식 파일의 실제 확장자(docx/pptx)를 돌려준다.
+    public String demoTemplateActualFormat(String title, String content, String key) {
+        if (wantsExplicitPdf(title, content)) {
+            return "pdf";
+        }
+        return demoTemplateFormat(key);
+    }
+
+    private ResponseEntity<byte[]> tryDemoTemplateOverride(String title, String content, String format) {
         String key = resolveDemoTemplateKey(title, content);
-        return key == null ? null : demoTemplateFile(key);
+        if (key == null) {
+            return null;
+        }
+        if (wantsExplicitPdf(title, content, format)) {
+            return demoTemplateFileAsPdf(key);
+        }
+        return demoTemplateFile(key);
     }
 
     private ResponseEntity<byte[]> buildDemoDocumentResponse(

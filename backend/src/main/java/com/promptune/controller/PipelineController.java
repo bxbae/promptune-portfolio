@@ -648,7 +648,10 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
             return;
         }
 
-        String realFormat = ai.demoTemplateFormat(templateKey);
+        // "PDF로 줘"처럼 명시적으로 PDF를 요청했으면 format을 "pdf"로 유지하고
+        // (실제로도 LibreOffice로 변환된 PDF가 내려간다), 그 외에는 서식 파일의
+        // 진짜 확장자(docx/pptx)로 보정한다.
+        String realFormat = ai.demoTemplateActualFormat(title, content, templateKey);
         String realBaseName = ai.demoTemplateBaseName(templateKey);
 
         if (realFormat != null) {
