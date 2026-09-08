@@ -1258,6 +1258,15 @@ public class AiServiceClient {
         }
     }
 
+    // 2026-09-08: 이전엔 제목(18pt)만 빼고 본문 전체가 굵기/크기 구분 없이 같은
+    // 11pt로 찍혀서, "## 소제목"/"- 항목" 같은 마크다운 기호가 그대로 텍스트로
+    // 노출되고 문서 전체가 위계 없는 텍스트 나열처럼 보였다(사용자 리포트: PDF가
+    // "빈 화면에 글씨만 있는" 것처럼 보인다). buildDemoDocx()는 이미 제목
+    // 레벨/불릿을 인식해서 굵게·크게 렌더링하는데 PDF 쪽만 그 로직이 빠져 있었다.
+    // 이 레코드가 한 줄(래핑된 조각)의 렌더링 정보를 담는다.
+    private record PdfLine(String text, float fontSize, boolean bold, float extraGapBefore) {
+    }
+
     private byte[] buildDemoPdf(
             String title,
             String body) throws java.io.IOException {
@@ -1282,12 +1291,57 @@ public class AiServiceClient {
             float pageHeight = org.apache.pdfbox.pdmodel.common.PDRectangle.A4.getHeight();
             float maxTextWidth = pageWidth - margin * 2;
 
-            java.util.List<String> lines = new java.util.ArrayList<>();
-            lines.add(" TITLE " + title);
-            lines.add("");
+            java.util.List<PdfLine> lines = new java.util.ArrayList<>();
+
+            for (String wrapped : wrapPdfLine(title, font, 18f, maxTextWidth)) {
+                lines.add(new PdfLine(wrapped, 18f, true, 0f));
+            }
+            lines.add(new PdfLine("", 11f, false, 0f));
 
             for (String rawLine : body.split("\n", -1)) {
-                lines.addAll(wrapPdfLine(rawLine.trim(), font, 11f, maxTextWidth));
+                String line = rawLine.trim();
+
+                if (line.isEmpty()) {
+                    lines.add(new PdfLine("", 11f, false, 0f));
+                    continue;
+                }
+
+                String text;
+                float fontSize;
+                boolean bold;
+                float gapBefore;
+
+                if (line.startsWith("### ")) {
+                    text = line.substring(4);
+                    fontSize = 13f;
+                    bold = true;
+                    gapBefore = 8f;
+                } else if (line.startsWith("## ")) {
+                    text = line.substring(3);
+                    fontSize = 14f;
+                    bold = true;
+                    gapBefore = 10f;
+                } else if (line.startsWith("# ")) {
+                    text = line.substring(2);
+                    fontSize = 15f;
+                    bold = true;
+                    gapBefore = 12f;
+                } else if (line.startsWith("- ") || line.startsWith("· ") || line.startsWith("* ")) {
+                    text = "•  " + line.substring(2).trim();
+                    fontSize = 11f;
+                    bold = false;
+                    gapBefore = 0f;
+                } else {
+                    text = line;
+                    fontSize = 11f;
+                    bold = false;
+                    gapBefore = 0f;
+                }
+
+                java.util.List<String> wrapped = wrapPdfLine(text, font, fontSize, maxTextWidth);
+                for (int i = 0; i < wrapped.size(); i++) {
+                    lines.add(new PdfLine(wrapped.get(i), fontSize, bold, i == 0 ? gapBefore : 0f));
+                }
             }
 
             org.apache.pdfbox.pdmodel.PDPage page =
@@ -1298,10 +1352,15 @@ public class AiServiceClient {
                     new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page);
 
             float y = pageHeight - margin;
-            float leading = 16f;
 
             try {
-                for (String line : lines) {
+                for (PdfLine pl : lines) {
+                    float leading = pl.fontSize() * 1.5f;
+
+                    if (pl.extraGapBefore() > 0f) {
+                        y -= pl.extraGapBefore();
+                    }
+
                     if (y < margin) {
                         stream.close();
                         page = new org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4);
@@ -1310,17 +1369,28 @@ public class AiServiceClient {
                         y = pageHeight - margin;
                     }
 
-                    boolean isTitle = line.startsWith(" TITLE ");
-                    String text = isTitle ? line.substring(7) : line;
-                    float fontSize = isTitle ? 18f : 11f;
+                    if (!pl.text().isEmpty()) {
+                        String safe = sanitizeForFont(pl.text(), font);
 
-                    stream.beginText();
-                    stream.setFont(font, fontSize);
-                    stream.newLineAtOffset(margin, y);
-                    stream.showText(sanitizeForFont(text, font));
-                    stream.endText();
+                        stream.beginText();
+                        stream.setFont(font, pl.fontSize());
+                        stream.newLineAtOffset(margin, y);
+                        stream.showText(safe);
+                        stream.endText();
 
-                    y -= isTitle ? leading * 1.6f : leading;
+                        if (pl.bold()) {
+                            // 볼드 전용 폰트 파일이 없어서, 아주 살짝(0.4pt) 오른쪽으로
+                            // 옮겨 같은 텍스트를 한 번 더 겹쳐 그리는 방식으로 굵게
+                            // 보이게 흉내 낸다("poor man's bold").
+                            stream.beginText();
+                            stream.setFont(font, pl.fontSize());
+                            stream.newLineAtOffset(margin + 0.4f, y);
+                            stream.showText(safe);
+                            stream.endText();
+                        }
+                    }
+
+                    y -= leading;
                 }
             } finally {
                 stream.close();
