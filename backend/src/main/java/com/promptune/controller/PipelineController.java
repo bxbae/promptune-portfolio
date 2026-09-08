@@ -1144,6 +1144,21 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
             return;
         }
 
+        // 2026-09-08: 데모 배포에서 실제 파일을 첨부하고 "이 문서 기준으로
+        // 정리해줘"처럼 그라운딩을 요구하는 프롬프트를 보내면 항상 503으로
+        // 막혔다("POST /api/execute" - "인증 성공" 뒤로 아무 로그 없이 실패,
+        // 나중엔 빠르게 503만 반복). 원인은 여기: 데모 모드의 retrievalExecute()는
+        // 실제 RAG 없이 demo-scenarios.json 텍스트 매칭 결과만 돌려주기 때문에
+        // (첨부된 실제 문서 내용과는 무관), retrievedDocuments가 항상 비어 있고,
+        // 아래 무결성 체크(실제 RAG 환경에서 "검색 결과가 첨부 범위를 벗어났는지"
+        // 검증하기 위한 것)가 그걸 이상 상태로 보고 매번 503을 던졌다. 이 체크는
+        // 실제 RAG가 있을 때만 의미가 있으므로 데모에서는 건너뛴다 - 첨부 문서
+        // 자체의 상태(READY/FAILED)는 이미 ensureActiveDocumentsReady()가
+        // 검증했다.
+        if (ai.isDemoEnabled()) {
+            return;
+        }
+
         java.util.Set<Long> expected = new java.util.HashSet<>(activeDocumentIds);
         java.util.Set<Long> actual = new java.util.HashSet<>();
 
