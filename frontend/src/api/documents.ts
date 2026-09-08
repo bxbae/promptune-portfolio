@@ -4,6 +4,7 @@
 
 // documentType 표기 규칙: UI 상에서는 한글, 백엔드에서 받는 값은 영문 enum
 import { getToken } from "@/lib/auth";
+import { fetchWithWakeupRetry } from "@/lib/fetchWithWakeup";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -77,11 +78,16 @@ export async function uploadDocument(
   formData.append("documentType", toEnum(documentType));
   if (description) formData.append("description", description);
 
-  const res = await fetch(`${API}/api/documents`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: formData,
-  });
+  // Render 무료 플랜 콜드스타트(서버가 잠들어 있다가 깨어나는 동안 502/503/504
+  // 또는 연결 자체 실패)로 인한 일시적 실패는 fetchWithWakeupRetry가 흡수한다.
+  // (lib/fetchWithWakeup.ts 참고 - login()에 이미 있던 재시도를 일반화한 것)
+  const res = await fetchWithWakeupRetry(() =>
+    fetch(`${API}/api/documents`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: formData,
+    })
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error || `업로드 실패: ${res.status}`);

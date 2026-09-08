@@ -1,5 +1,6 @@
 // 백엔드 API 호출. 흐름도 2번(입력중단 감지·이전요청 취소)의 AbortController 포함.
 import { getToken } from "@/lib/auth";
+import { fetchWithWakeupRetry } from "@/lib/fetchWithWakeup";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
@@ -85,17 +86,22 @@ export async function execute(
   receiverProfileId?: number,
   signal?: AbortSignal,
 ) {
-  const res = await fetch(`${API}/api/execute`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({
-      finalPrompt,
-      chatSessionId,
-      documentIds,
-      receiverProfileId,
-    }),
-    signal,
-  });
+  // Render 무료 플랜 콜드스타트로 인한 일시적 502/503/504·연결 실패는
+  // fetchWithWakeupRetry가 흡수한다. 사용자가 signal로 직접 취소한 경우는
+  // AbortError로 즉시 던져지고 재시도되지 않는다 (fetchWithWakeup.ts 참고).
+  const res = await fetchWithWakeupRetry(() =>
+    fetch(`${API}/api/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({
+        finalPrompt,
+        chatSessionId,
+        documentIds,
+        receiverProfileId,
+      }),
+      signal,
+    })
+  );
   if (!res.ok) throw new Error(`실행 실패: ${res.status}`);
   return res.json();
 }
