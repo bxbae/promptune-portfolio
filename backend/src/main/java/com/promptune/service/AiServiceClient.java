@@ -915,6 +915,26 @@ public class AiServiceClient {
                 .orElse(null);
     }
 
+    // 2026-09-08: PipelineController.executeGroundedDocumentAction()은
+    // (documentAction이 있으면서 첨부/활성 문서도 있는 경우) demo-scenarios.json
+    // 매칭을 건너뛰고 항상 "현재 첨부 문서를 바탕으로 {title} 문서를 생성합니다."
+    // 라는 정형 문구 + 원문 그대로만 문서 내용으로 썼다. 그런데 "이 비교 내용
+    // 바탕으로 최종 검토 보고서로 정리해서 파일로 만들어줘"처럼 이미
+    // demo-scenarios.json에 잘 정리된 생성 답변(generatedAnswer)이 있는
+    // 요청도 있어서, 그 경우엔 정형 문구 대신 실제로 준비된 답변을 그대로
+    // 채팅 응답/문서 내용으로 쓰는 게 훨씬 낫다. 데모 시나리오 매칭
+    // (DemoScenarioService, ai.generate()/retrievalExecute()가 쓰는 것과
+    // 동일한 문자 유사도 로직)에서 찾은 답변이 있으면 그걸 돌려주고, 없으면
+    // 호출한 쪽이 기존 정형 문구 폴백을 쓰도록 빈 Optional을 돌려준다.
+    public java.util.Optional<String> demoScenarioGeneratedAnswer(String query) {
+        if (!demoEnabled || query == null || query.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return demoScenarioService.findBestMatch(query)
+                .map(scenario -> scenario.generatedAnswer)
+                .filter(answer -> answer != null && !answer.isBlank());
+    }
+
     public boolean isDemoEnabled() {
         return demoEnabled;
     }

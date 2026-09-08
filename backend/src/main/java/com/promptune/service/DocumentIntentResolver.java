@@ -46,6 +46,17 @@ public class DocumentIntentResolver {
             "^(응|ㅇㅇ+|네|예|그래|좋아|맞아|그렇게\\s*해줘|해줘|그걸로\\s*해줘|이걸로\\s*해줘)[.!?~\\s]*$",
             Pattern.CASE_INSENSITIVE);
 
+    // 2026-09-08: "방금 만든 보고서 첨부해서 유부장님께 전달 메일 써줘"처럼,
+    // 실제로 만들어달라는 건 "메일"인데 문장 안에 이미 존재하는 보고서를
+    // "첨부"용으로 언급만 해서 DOCUMENT_NOUN("보고서")이 걸리는 경우가 있다.
+    // CREATE_VERB("써줘") + DOCUMENT_NOUN("보고서")만 보고 판단하면 이런
+    // 메일 작성 요청까지 "새 보고서 파일을 만들어달라"는 뜻으로 잘못 해석해서
+    // 다운로드 가능한 문서 생성 흐름(GENERATE_DOCUMENT)으로 새버린다 - 실제로는
+    // 그냥 채팅 답변(이메일 초안 텍스트)이 나가야 하는 요청인데도. "메일"이
+    // 언급됐고 정작 파일 형식(FILE_NOUN: 파일/pdf/워드/docx 등)은 요청한 적이
+    // 없다면, 진짜 의도는 메일 작성이라고 보고 문서 생성 분기에서 제외한다.
+    private static final Pattern EMAIL_NOUN = Pattern.compile("(메일|이메일|email)", Pattern.CASE_INSENSITIVE);
+
     // detectTitle()이 어떤 구체적인 보고서 종류도 못 찾았을 때 쓰는 폴백 제목.
     // resolve()에서 "현재 발화에 구체적인 문서 종류가 있는지" 판단할 때도
     // 재사용한다(중복 문자열 방지).
@@ -68,8 +79,15 @@ public class DocumentIntentResolver {
         boolean hasDocumentNoun = DOCUMENT_NOUN.matcher(current).find();
         boolean hasFileNoun = FILE_NOUN.matcher(current).find();
 
+        // "메일 써줘"인데 파일 형식 언급이 없으면 문서 생성이 아니라 메일
+        // 작성 요청으로 본다 - 위 EMAIL_NOUN 주석 참고.
+        boolean looksLikeEmailRequest =
+                EMAIL_NOUN.matcher(current).find() && !hasFileNoun;
+
         boolean directDocumentRequest =
-                hasCreateVerb && (hasDocumentNoun || hasFileNoun);
+                hasCreateVerb
+                        && (hasDocumentNoun || hasFileNoun)
+                        && !looksLikeEmailRequest;
 
         // 2026-09-07: "이 문서 파일로 만들어줘", "위 내용 문서로 만들어줘"처럼
         // DOCUMENT_NOUN이 있어도 "문서/양식/템플릿" 같은 범용 단어뿐이고 실제
@@ -86,6 +104,7 @@ public class DocumentIntentResolver {
         boolean contextualFileRequest =
                 hasCreateVerb
                         && (hasFileNoun || hasDocumentNoun)
+                        && !looksLikeEmailRequest
                         && !currentHasSpecificTitleHint
                         && !previousAssistant.isBlank();
 

@@ -671,13 +671,45 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
         }
     }
 
+    // demo-scenarios.json의 generatedAnswer는 관례적으로 "제목: XXX" 줄로
+    // 문서 제목을 적어둔다(21/24번 시나리오 등). 문서 생성 응답의 제목을
+    // DocumentIntentResolver가 뭉뚱그린 값("업무보고서") 대신 이 실제 제목으로
+    // 보정할 때 쓴다.
+    private static final java.util.regex.Pattern GENERATED_TITLE_PATTERN =
+            java.util.regex.Pattern.compile("제목\\s*[:：]\\s*(.+)");
+
+    private java.util.Optional<String> extractGeneratedTitle(String content) {
+        if (content == null) {
+            return java.util.Optional.empty();
+        }
+        for (String line : content.split("\\r?\\n")) {
+            java.util.regex.Matcher m = GENERATED_TITLE_PATTERN.matcher(line.trim());
+            if (m.matches()) {
+                String title = m.group(1).trim();
+                if (!title.isEmpty()) {
+                    return java.util.Optional.of(title);
+                }
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     private Map<String, Object> executeDocumentAction(
             ExecuteRequest req,
             Long userId,
             com.promptune.service.DocumentIntentResolver.DocumentAction action) {
 
-        String assistantText =
-                "요청하신 " + action.title() + " 문서를 생성합니다.";
+        // 2026-09-08: executeGroundedDocumentAction과 동일한 이유로, 첨부
+        // 문서가 아직 없는(=이 early-return 분기) 첫 턴이라도 demo-scenarios.json에
+        // 이미 준비된 답변이 있으면 정형 문구("요청하신 ~ 문서를 생성합니다.")
+        // 대신 그 답변을 그대로 쓴다.
+        java.util.Optional<String> scenarioAnswer =
+                ai.demoScenarioGeneratedAnswer(req.finalPrompt());
+
+        String assistantText = scenarioAnswer.orElseGet(() ->
+                "요청하신 " + action.title() + " 문서를 생성합니다.");
+
+        String effectiveContent = scenarioAnswer.orElse(action.content());
 
         com.promptune.domain.PromptSession session =
                 new com.promptune.domain.PromptSession(
@@ -699,14 +731,17 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
                 req.chatSessionId(),
                 req.finalPrompt());
 
+        String effectiveTitle =
+                extractGeneratedTitle(effectiveContent).orElse(action.title());
+
         Map<String, Object> actionPayload = new java.util.HashMap<>();
         actionPayload.put("type", "GENERATE_DOCUMENT");
-        actionPayload.put("title", action.title());
-        actionPayload.put("content", action.content());
+        actionPayload.put("title", effectiveTitle);
+        actionPayload.put("content", effectiveContent);
         actionPayload.put("format", action.format());
         actionPayload.put("useExistingTemplate", action.useExistingTemplate());
 
-        applyDemoTemplateCorrection(actionPayload, action.title(), action.content());
+        applyDemoTemplateCorrection(actionPayload, effectiveTitle, effectiveContent);
 
         Map<String, Object> resultPayload = new java.util.HashMap<>();
         resultPayload.put("result", assistantText);
@@ -733,8 +768,18 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
             java.util.List<Long> activeDocumentIds,
             java.util.List<java.util.Map<String, Object>> retrievedDocuments) {
 
-        String assistantText =
-                "현재 첨부 문서를 바탕으로 " + action.title() + " 문서를 생성합니다.";
+        // 2026-09-08: 데모 모드에서 demo-scenarios.json에 이미 잘 정리된
+        // 답변(generatedAnswer)이 있는 요청("이 비교 내용 바탕으로 최종 검토
+        // 보고서로 정리해서 파일로 만들어줘" 등)까지 아래 정형 문구로
+        // 뭉개버리면, 애써 준비한 시나리오 내용이 문서 생성 분기를 타는
+        // 순간 통째로 버려진다. req.finalPrompt() 기준으로 매칭되는 시나리오가
+        // 있으면 그 답변을 채팅 응답 + 문서 내용 둘 다에 그대로 쓰고, 없을
+        // 때만 기존 정형 문구로 폴백한다 - AiServiceClient.demoScenarioGeneratedAnswer.
+        java.util.Optional<String> scenarioAnswer =
+                ai.demoScenarioGeneratedAnswer(req.finalPrompt());
+
+        String assistantText = scenarioAnswer.orElseGet(() ->
+                "현재 첨부 문서를 바탕으로 " + action.title() + " 문서를 생성합니다.");
 
         session.setAiResponseText(assistantText);
         promptSessionRepository.save(session);
@@ -743,23 +788,29 @@ public Map<String, Object> execute(@RequestBody ExecuteRequest req, org.springfr
                 req.chatSessionId(),
                 req.finalPrompt());
 
-        String groundedContent =
+        String groundedContent = scenarioAnswer.orElseGet(() ->
                 buildGroundedDocumentSource(
                         action.content(),
-                        retrievedDocuments);
+                        retrievedDocuments));
+
+        // 시나리오 답변에 "제목: XXX" 줄이 있으면(entry 21/24 등 기존 데모
+        // 답변 작성 관례) DocumentIntentResolver의 뭉뚱그려진 제목("업무보고서"
+        // 등) 대신 그 실제 제목을 문서 제목으로 쓴다.
+        String effectiveTitle =
+                extractGeneratedTitle(groundedContent).orElse(action.title());
 
         Map<String, Object> actionPayload =
                 new java.util.HashMap<>();
 
         actionPayload.put("type", "GENERATE_DOCUMENT");
-        actionPayload.put("title", action.title());
+        actionPayload.put("title", effectiveTitle);
         actionPayload.put("content", groundedContent);
         actionPayload.put("format", action.format());
         actionPayload.put(
                 "useExistingTemplate",
                 action.useExistingTemplate());
 
-        applyDemoTemplateCorrection(actionPayload, action.title(), groundedContent);
+        applyDemoTemplateCorrection(actionPayload, effectiveTitle, groundedContent);
 
         Map<String, Object> resultPayload =
                 new java.util.HashMap<>();
