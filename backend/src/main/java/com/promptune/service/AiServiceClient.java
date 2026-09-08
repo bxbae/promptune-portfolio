@@ -23,6 +23,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.Map;
 import java.util.List;
 
@@ -55,11 +56,19 @@ public class AiServiceClient {
     private DemoScenarioService demoScenarioService;
 
     public AiServiceClient(@Value("${ai.service.url:http://localhost:8000}") String baseUrl) {
+        // 2026-09-08: connectTimeout/readTimeout이 전혀 없어서, ai-service가 없거나
+        // (이 데모 배포처럼) 도달 불가능한 주소일 때 demoEnabled 분기를 하나라도
+        // 빠뜨리면 요청 스레드가 OS 소켓 타임아웃(수십 초~수 분)까지 그대로
+        // 붙잡혀 있었다(retrieve() 누락 버그로 실제 발생 - 위 주석 참고). 실제
+        // ai-service 호출도 보통 수 초~수십 초면 응답하므로, 안전망으로 연결은
+        // 5초, 응답은 30초로 제한해서 이런 종류의 무한 대기를 원천 차단한다.
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(5))
                 .build();
 
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofSeconds(30));
 
         this.client = RestClient.builder()
                 .baseUrl(baseUrl)
@@ -120,6 +129,19 @@ public class AiServiceClient {
         }
     }
 
+    // ImproveController.ELEMENT_PLACEHOLDERS와 문자 그대로 일치해야 한다 - improve()
+    // 데모 폴백이 만든 문장에서 ImproveController가 이 placeholder 텍스트를 찾아
+    // foundElements를 판단하고, 그걸 ai.suggest()(이미 demoEnabled 분기 있음)로 넘긴다.
+    private static final Map<String, String> DEMO_ELEMENT_PLACEHOLDERS = Map.of(
+            "TASK", "[해야 할 작업]",
+            "AUDIENCE", "[대상/수신자]",
+            "CONTEXT", "[배경/상황 정보]",
+            "FORMAT", "[원하는 출력 형식]",
+            "TONE", "[원하는 어조]",
+            "LENGTH", "[원하는 길이]",
+            "CONSTRAINT", "[제약 조건]",
+            "EXAMPLE", "[참고 예시]");
+
     public PromptRuleResult promptRule(
             String text,
             Map<String, Integer> missing,
@@ -127,6 +149,17 @@ public class AiServiceClient {
             String speed,
             String detail,
             String preserve) {
+        // 2026-09-08: diagnose/suggest 등과 달리 promptRule()/improvePrompt()에는
+        // demoEnabled 분기가 아예 없었다 - "다듬기"(ImproveController./api/improve)
+        // 버튼을 누르면 매번 존재하지 않는 ai-service를 호출하며 (새로 추가한
+        // connectTimeout/readTimeout 전까지는) 최대 몇 분씩 응답 없이 멈춰 있었다.
+        // 데모에서는 실제 LLM 재작성 없이, missing(diagnose 결과)의 요소들을
+        // 그대로 "부족한 요소"로 돌려준다.
+        if (demoEnabled) {
+            List<String> missingElements =
+                    missing == null ? List.of() : new java.util.ArrayList<>(missing.keySet());
+            return new PromptRuleResult(missingElements, false, null, false, true, false);
+        }
 
         long start = System.currentTimeMillis();
 
@@ -161,6 +194,25 @@ public class AiServiceClient {
             String detail,
             String preserve,
             PromptRuleResult promptRule) {
+        if (demoEnabled) {
+            // 원문 뒤에 부족한 요소별 placeholder를 이어붙인다 - ImproveController가
+            // 이 placeholder들을 찾아 "채울 후보"를 suggest()로 요청하는 흐름을
+            // 그대로 태울 수 있게(placeholder 문자열이 정확히 일치해야 함).
+            StringBuilder improved =
+                    new StringBuilder(text == null ? "" : text.trim());
+
+            List<String> missingElements =
+                    promptRule == null ? List.of() : promptRule.missingElements();
+
+            for (String element : missingElements) {
+                String placeholder = DEMO_ELEMENT_PLACEHOLDERS.get(element);
+                if (placeholder != null) {
+                    improved.append(" ").append(placeholder);
+                }
+            }
+
+            return new ImprovePromptResult(improved.toString(), true);
+        }
 
         long start = System.currentTimeMillis();
 
@@ -190,6 +242,21 @@ public class AiServiceClient {
 
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> retrieve(String query, Long ownerUserId, int topK) {
+        // 2026-09-08: diagnose/suggest/retrievalExecute/generate/validate/
+        // summarizeTitle/indexDocument와 달리 이 retrieve()만 demoEnabled 분기가
+        // 빠져 있었다. PipelineController.execute()가 파일관리 카탈로그 제목매칭에
+        // 실패하고 shouldSearchCatalog(prompt)가 true일 때(첨부 문서를 언급하는
+        // 새 대화 등) 이 메서드를 호출하는데, 이 Render 배포에는 실제 ai-service가
+        // 없어서 client가 연결 자체를 못 맺고 - 아래 HttpClient에 connectTimeout이
+        // 없어서(JDK 기본값은 사실상 무제한, OS 소켓 타임아웃에 의존) 요청 스레드가
+        // 2분 넘게 응답 없이 붙잡혀 있다가 결국 Render 프록시가 503을 돌려주는
+        // 패턴이었다 - 서버 로그에 인증 성공만 찍히고 그 뒤로 아무 것도 안 남는
+        // "로그 없는 실패"가 정확히 이 증상이었다(프론트의 콜드스타트 재시도가
+        // 이 매 재시도마다 같은 hang을 다시 트리거해서 최대 재시도까지 다 소진됨).
+        if (demoEnabled) {
+            return List.of();
+        }
+
         long start = System.currentTimeMillis();
         try {
             Map result = client.post()
