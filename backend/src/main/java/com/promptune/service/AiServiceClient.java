@@ -95,7 +95,7 @@ public class AiServiceClient {
             List<String> targetElements) {
         if (demoEnabled) {
             return demoScenarioService.findBestMatch(text)
-                    .map(this::toSuggestResult)
+                    .map(scenario -> toSuggestResult(scenario, text))
                     .orElseGet(() -> new SuggestResult(List.of()));
         }
 
@@ -1473,16 +1473,38 @@ public class AiServiceClient {
         return new DiagnoseResult(Map.of(), "chat", List.of(), false);
     }
 
-    private SuggestResult toSuggestResult(DemoScenario scenario) {
+    private SuggestResult toSuggestResult(DemoScenario scenario, String queryText) {
         if (scenario.suggestions == null || scenario.suggestions.isEmpty()) {
             return new SuggestResult(List.of());
         }
+
+        // 2026-09-08: demo-scenarios.json의 charOffset은 matchQuestions[0](기준 문장)을
+        // 놓고 "여기 삽입하면 된다"고 미리 재놓은 값이다. 문제는, 사용자가 진단 화면에서
+        // 제안을 하나 적용하면(예: CONTEXT 적용) 문장이 그만큼 길어지는데, 같은 화면에
+        // 남아 있는 다음 제안(TONE)을 이어서 적용할 때도 프런트가 이 "원본 기준" 값을
+        // 그대로 재사용해서 이미 길어진 문장의 엉뚱한 위치(단어 중간)에 끼워 넣는다 -
+        // 실사용 중 "시스"+"템" 사이에 다른 제안 문구가 끼어들며 문장이 깨지는 걸로
+        // 확인됨. charOffset은 항상 "뒤에 남는 동사구 앞"을 가리키도록 작성돼 있으므로,
+        // "문장 끝에서부터 몇 글자 지점인지"(suffixLen)로 바꿔 저장한 것처럼 취급해
+        // 매 호출마다 실제 현재 질의 문장(queryText) 길이 기준으로 다시 계산해서
+        // 돌려준다 - JSON 값 자체는 그대로 두고 여기서만 보정한다.
+        String reference =
+                scenario.matchQuestions == null || scenario.matchQuestions.isEmpty()
+                        ? ""
+                        : scenario.matchQuestions.get(0);
+        int referenceLength = reference.length();
+        int queryLength = queryText == null ? 0 : queryText.length();
+
         List<SuggestionItem> items = scenario.suggestions.stream()
-                .map(s -> new SuggestionItem(
-                        s.element,
-                        s.primary,
-                        s.alternatives == null ? List.of() : s.alternatives,
-                        new SuggestionAnchor(s.sentenceIndex, s.charOffset)))
+                .map(s -> {
+                    int suffixLen = Math.max(0, referenceLength - s.charOffset);
+                    int adjustedOffset = Math.max(0, queryLength - suffixLen);
+                    return new SuggestionItem(
+                            s.element,
+                            s.primary,
+                            s.alternatives == null ? List.of() : s.alternatives,
+                            new SuggestionAnchor(s.sentenceIndex, adjustedOffset));
+                })
                 .toList();
         return new SuggestResult(items);
     }
