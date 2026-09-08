@@ -213,6 +213,16 @@ public class AiServiceClient {
 
     // 문서 업로드 직후 ai-service에 청킹·임베딩 요청 (document_chunks 채우기)
     public Map<String, Object> indexDocument(Long documentId, Long ownerUserId, String fileType, MultipartFile file) {
+        // 2026-09-08: 데모 배포에는 실제 ai-service가 없는데, 이 메서드는
+        // diagnose/suggest/retrievalExecute/generate/validate와 달리 demoEnabled
+        // 분기가 아예 빠져 있었다 - 그래서 데모 사이트에서 파일을 첨부하면
+        // 형식(pdf/docx/...)과 무관하게 항상 "실패"로 떴다(존재하지 않는
+        // ai-service로 진짜 인덱싱 요청을 보내다 커넥션 실패). 데모는 내부
+        // 문서 검색 자체를 다루지 않으므로(항상 빈 목록), 실제 청킹/임베딩 없이
+        // "인덱싱 성공"만 흉내 내서 첨부가 막히지 않게 한다.
+        if (demoEnabled) {
+            return Map.of("status", "ready");
+        }
         long start = System.currentTimeMillis();
         try {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
@@ -242,6 +252,13 @@ public class AiServiceClient {
             String fileType,
             byte[] fileBytes,
             String filename) {
+
+        // 2026-09-08: 실제 업로드/재인덱싱 경로(DocumentController)가 쓰는 오버로드는
+        // 이쪽이다. 위 MultipartFile 오버로드와 같은 이유로 demoEnabled 분기 누락 -
+        // 데모 사이트에서 pdf/docx 등 지원 형식을 첨부해도 항상 "실패"로 떴던 원인.
+        if (demoEnabled) {
+            return Map.of("status", "ready");
+        }
 
         long start = System.currentTimeMillis();
 
