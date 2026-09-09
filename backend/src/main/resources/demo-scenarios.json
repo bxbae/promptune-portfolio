@@ -754,6 +754,36 @@
   },
   {
     "matchQuestions": [
+      "그럼 이 문제들을 개선할 만한 최신 AI Agent 개발 기술을 찾아줘. Microsoft Agent Framework, LangGraph, OpenAI Agents SDK를 MCP, 멀티에이전트, 메모리, 승인 절차, 관찰성 기준으로 비교해줘.",
+      "이 문제들 해결할 만한 요즘 나온 AI Agent 솔루션 좀 찾아줘",
+      "Microsoft Agent Framework, LangGraph, OpenAI Agents SDK 비교해줘",
+      "AI Agent 프레임워크 MCP, 멀티에이전트, 메모리, 승인 절차, 관찰성 기준으로 비교해줘",
+      "최신 AI Agent 개발 기술 찾아줘",
+      "AI Agent 개발 프레임워크 뭐가 있는지 조사해줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [
+      {
+        "title": "Tech Tuesday: The complete guide to agentic AI tools in 2026",
+        "url": "https://dynamicbusiness.com/article/tech-tuesday-the-complete-guide-to-agentic-ai-tools-in-2026",
+        "content": "상태 관리 개선, 비동기 실행 개선, 디버깅 도구 강화, 신규 플러그인 시스템 등 2026년 에이전틱 AI 툴 전반의 개선 동향을 정리. Microsoft 생태계에서 리서치 에이전트·분석 파이프라인·멀티스텝 추론 파이프라인을 구축하는 팀에 특히 유용하다고 소개."
+      },
+      {
+        "title": "11 Top AI Agent Frameworks in 2026",
+        "url": "https://autogpt.net/top-ai-agent-frameworks",
+        "content": "LangGraph, OpenAI Agents SDK, Microsoft Agent Framework를 포함한 2026년 주요 AI 에이전트 프레임워크 11종을 정리하고 각각의 강점과 적합한 활용 사례를 비교."
+      }
+    ],
+    "generatedAnswer": "요청하신 대로 Microsoft Agent Framework, LangGraph, OpenAI Agents SDK를 MCP·멀티에이전트·메모리·승인 절차·관찰성 5가지 기준으로 비교해봤어요.\n\n1. Microsoft Agent Framework: AutoGen과 Semantic Kernel의 후속으로 나온 엔터프라이즈 지향 프레임워크예요. MCP 서버·클라이언트를 네이티브로 지원하고, Sequential·Concurrent·Handoff 같은 멀티에이전트 오케스트레이션 패턴을 기본 제공해요. 대화 상태는 스레드 단위로 관리되고, 특정 액션 실행 전 사람 승인을 요구하는 human-in-the-loop 훅을 코드로 넣을 수 있어요. 관찰성은 OpenTelemetry를 표준 지원해서 기존 엔터프라이즈 모니터링 도구와 바로 연동돼요.\n\n2. LangGraph: 복잡한 워크플로우 제어에 강한 그래프 기반 프레임워크예요. MCP 도구를 어댑터로 그래프 노드처럼 연결할 수 있고, 상태 그래프(StateGraph) 구조 덕분에 에이전트 간 분기·합류를 세밀하게 설계할 수 있어요. 체크포인터로 실행 상태를 저장해서 대화가 끊겨도 이어서 재개할 수 있고, interrupt() 기능으로 특정 노드 실행 전 사람이 개입해 승인·수정할 수 있어요. 관찰성은 LangSmith와 연동하면 노드별 실행·토큰 사용량·지연시간까지 추적 가능해요.\n\n3. OpenAI Agents SDK: 가장 가볍고 빠르게 시작할 수 있는 SDK예요. MCP 서버 연결을 SDK 레벨에서 기본 지원하고, 멀티에이전트는 핸드오프(handoff) 방식으로 단순하게 위임하는 구조예요. 메모리는 세션(Session) 객체로 대화 기록을 관리하는 비교적 단순한 모델이고, 가드레일(Guardrails) 기능으로 특정 조건에서 실행을 멈추고 확인을 요청하도록 구성할 수 있어요. 자체 트레이싱 대시보드로 실행 흐름을 시각적으로 바로 확인할 수 있는 게 특징이에요.\n\n종합하면 엔터프라이즈 통합·관찰성은 Microsoft Agent Framework, 복잡한 워크플로우 제어는 LangGraph, 빠른 프로토타이핑은 OpenAI Agents SDK가 상대적으로 강점이에요. 저희 팀 상황(온프레미스 연동, 승인 절차 필요 여부)에 맞춰 더 좁혀볼까요?\n\n※ 위 검색 결과는 promptune-portfolio 데모용 예시입니다. 실제 서비스에서는 실시간 웹 검색 결과를 바탕으로 답변이 생성됩니다."
+  },
+  {
+    "matchQuestions": [
       "이 문서 기준으로 현재 시스템 스펙이랑 방금 찾은 솔루션들 비교해줘",
       "첨부한 근태관리 정책 문서 기준으로 비교해줘",
       "현재 시스템이랑 신규 솔루션 비교해줘",
