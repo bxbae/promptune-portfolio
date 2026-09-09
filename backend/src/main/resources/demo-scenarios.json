@@ -1068,5 +1068,57 @@
     "suggestions": [],
     "webResults": [],
     "generatedAnswer": "방금 정리한 법인카드 사용 내역서 내용을 권사원님께도 검토 요청 문구로 정리해드릴게요.\n\n제목: [검토 요청] 법인카드 사용 내역서 검토 부탁드립니다\n\n권사원님, 안녕하세요. 총무팀 김대리님께 제출한 법인카드 사용 내역서를 권사원님께도 공유드리니 확인 부탁드립니다.\n\n첨부: 법인카드 사용 내역서\n\n검토 후 특이사항 있으시면 회신 부탁드립니다. 감사합니다."
+  },
+  {
+    "matchQuestions": [
+      "이 AI Agent 솔루션 도입하려면 비용이 얼마나 들까?",
+      "이 AI Agent 솔루션 도입하려면 비용이 얼마나 들까",
+      "이거 도입하는데 비용이 얼마나 들어?",
+      "AI Agent 솔루션 도입 비용이 얼마나 될까",
+      "이 프레임워크들 도입 비용 알려줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "chat",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "지금까지 살펴본 자료(에이전틱 AI 툴 가이드, AI Agent 프레임워크 비교 아티클)에는 정확한 도입 비용 정보가 포함되어 있지 않아요. 근거 없이 임의로 금액을 추정해서 안내드리면 잘못된 판단으로 이어질 수 있어, 정확한 수치는 말씀드리기 어려운 점 양해 부탁드려요.\n\n비용을 확인하시려면 각 프레임워크의 공식 문서나 벤더 견적을 통해 별도로 확인하시는 걸 추천드려요. Microsoft Agent Framework, LangGraph, OpenAI Agents SDK 모두 오픈소스라 라이선스 비용은 없지만, 실제 도입 비용은 연동하는 LLM API 사용량, 인프라, 운영 인력에 따라 달라지기 때문에 팀 상황에 맞는 별도 견적 확인이 필요합니다."
+  },
+  {
+    "matchQuestions": [
+      "유부장님께 메일로 보내줘",
+      "유부장님한테 메일로 보내줘",
+      "이 내용 유부장님께 메일로 정리해서 보내줘",
+      "유부장님께 이메일로 전달해줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "email",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "유부장님께 보내는 메일이라 정중한 보고체로 톤을 자동으로 맞춰서 정리했어요.\n\n제목: AI Agent 프레임워크 도입 검토 결과 공유\n\n유부장님, 안녕하십니까. 최근 검토한 AI Agent 프레임워크(Microsoft Agent Framework, LangGraph, OpenAI Agents SDK) 비교 결과를 공유드립니다.\n\n- 엔터프라이즈 통합·관찰성: Microsoft Agent Framework가 상대적으로 강점입니다.\n- 복잡한 워크플로우 제어: LangGraph가 상대적으로 강점입니다.\n- 빠른 프로토타이핑: OpenAI Agents SDK가 상대적으로 강점입니다.\n\n다만 정확한 도입 비용은 검토 자료에 포함되어 있지 않아, 별도 견적 확인이 필요한 점 참고 부탁드립니다.\n\n검토 부탁드리며, 궁금하신 점 있으시면 말씀해 주십시오. 감사합니다."
+  },
+  {
+    "matchQuestions": [
+      "짧게 줄여줘",
+      "더 짧게 줄여줘",
+      "간단하게 줄여줘",
+      "내용 좀 짧게 줄여줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "email",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "네, 짧게 줄인 버전으로 다시 정리했어요. 유부장님께 보내는 메일은 짧고 간결한 형식을 선호하시는 것으로 기억해둘게요 — 다음에 유부장님께 메일 보내실 때도 이 형식으로 자동 반영해드릴게요.\n\n제목: AI Agent 프레임워크 도입 검토 결과 공유 (요약)\n\n유부장님, 검토한 AI Agent 프레임워크 3종 비교 결과를 간단히 공유드립니다.\n\n- Microsoft Agent Framework: 엔터프라이즈 통합에 강점\n- LangGraph: 복잡한 워크플로우 제어에 강점\n- OpenAI Agents SDK: 빠른 프로토타이핑에 강점\n\n정확한 도입 비용은 자료에 없어 별도 확인이 필요합니다. 감사합니다."
   }
 ]
