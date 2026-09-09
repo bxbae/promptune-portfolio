@@ -1216,5 +1216,23 @@
     "suggestions": [],
     "webResults": [],
     "generatedAnswer": "체크리스트라는 말씀은 없으셨지만, 평소 체크리스트 형식을 자주 선호하시는 것으로 학습되어 있어 이번에도 체크리스트 형태로 정리해드렸어요.\n\n☐ AI Agent 프레임워크(Microsoft Agent Framework/LangGraph/OpenAI Agents SDK) 도입 검토 마무리\n☐ 반복 업무 자동화 후보 업무 선정\n☐ 사내 자료 검색 개선 방안 논의\n☐ 유부장님께 검토 결과 공유\n☐ 다음 스프린트 계획 수립\n\n다른 형식을 원하시면 언제든 말씀해주세요."
+  },
+  {
+    "matchQuestions": [
+      "지금까지 종합해서 보고서로 만들어줘",
+      "지금까지 내용 종합해서 보고서로 만들어줘",
+      "여태까지 나온 내용 종합해서 보고서로 정리해줘",
+      "지금까지 논의한 내용 종합 보고서로 만들어줘",
+      "지금까지 얘기한 내용 종합해서 보고서로 만들어줘"
+    ],
+    "diagnose": {
+      "missing": {},
+      "taskType": "report_internal",
+      "typos": [],
+      "needsInternalDocs": false
+    },
+    "suggestions": [],
+    "webResults": [],
+    "generatedAnswer": "지금까지 살펴본 문제점 파악부터 AI Agent 프레임워크 조사, 비교 내용까지 이어서 종합 보고서로 정리했어요.\n\n제목: AI Agent 프레임워크 도입 검토 보고서\n\n1. 현황 및 문제점: 팀 내 반복 업무 자동화 필요성이 계속 제기되고 있고, 사내 자료 검색에도 매번 오랜 시간이 소요되는 상황\n2. 조사한 솔루션: Microsoft Agent Framework / LangGraph / OpenAI Agents SDK\n3. 비교 결과: MCP 지원·멀티에이전트 오케스트레이션·메모리·승인 절차·관찰성 5가지 기준으로 비교했을 때, Microsoft Agent Framework는 엔터프라이즈 통합·관찰성에, LangGraph는 복잡한 워크플로우 제어에, OpenAI Agents SDK는 빠른 프로토타이핑에 강점\n4. 결론 및 제안: (팀 상황에 맞춰 우선순위 프레임워크를 선택하시고, 정확한 도입 비용은 각 프레임워크 공식 문서·벤더 견적을 통해 별도 확인이 필요합니다)\n\n보고서 파일(AI_Agent_프레임워크_도입_검토_보고서.docx)로 준비해뒀어요. 이대로 유부장님께 전달 메일도 작성해드릴까요?"
   }
 ]
